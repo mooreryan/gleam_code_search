@@ -17,21 +17,36 @@ import mist
 import wisp
 import wisp/wisp_mist
 
-const min_query_length = 3
+const min_query_length: Int = 3
 
-const max_query_length = 64
+const max_query_length: Int = 64
 
 type Context {
   // TODO: when you read the big json, it takes a lot of ram (5gb?), but when
   // you stick the index in the context that gets handed off to the handler,
   // somehow things get up to like 10gb of ram. I think you probably shouldn't
   // be sending lots of data through the context like this.
-  Context(static_directory: String, index: Index)
+  Context(static_directory: String)
 }
 
 fn static_directory() -> String {
   let assert Ok(priv_directory) = wisp.priv_directory("server")
   priv_directory <> "/static"
+}
+
+@external(erlang, "persistent_term", "put")
+fn do_put_index(key: String, index: Index) -> Nil
+
+fn put_index(index: Index) -> Nil {
+  let _ = do_put_index("server-index", index)
+  Nil
+}
+
+@external(erlang, "persistent_term", "get")
+fn do_get_index(key: String) -> Index
+
+fn get_index() -> Index {
+  do_get_index("server-index")
 }
 
 pub fn main() -> Nil {
@@ -47,13 +62,9 @@ pub fn main() -> Nil {
   let assert Ok(index) = cli.read_index(index_path)
     as "failed to read and parse index"
 
-  let context =
-    Context(
-      static_directory: static_directory(),
-      // Make a fake index for now to see if the mem goes down when we don't put
-      // it in the context....and yeah, it does.
-      index: index.Index(files: iv.new(), trigrams: dict.new()),
-    )
+  put_index(index)
+
+  let context = Context(static_directory: static_directory())
 
   let assert Ok(_) =
     wisp_mist.handler(handle_request(_, context), secret_key_base)
@@ -85,7 +96,7 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
       case form_result {
         Ok(search_form) -> {
           wisp.log_debug("searching query: " <> search_form.query)
-          let search_result = cli.search_query(search_form.query, context.index)
+          let search_result = cli.search_query(search_form.query, get_index())
 
           case search_result {
             Ok(search_results) -> {
@@ -114,7 +125,9 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
   }
 }
 
-fn search_results_page(search_results: List(cli.SearchResult)) {
+fn search_results_page(
+  search_results: List(cli.SearchResult),
+) -> element.Element(a) {
   html.div([], [
     html.h2([], [
       html.text("Search Results"),
@@ -155,7 +168,7 @@ fn middleware(
   handle_request(request)
 }
 
-fn home_page(form) -> element.Element(a) {
+fn home_page(form: Form(SearchForm)) -> element.Element(a) {
   html.div([], [
     html.h1([attribute.class("text-2xl")], [
       html.text("Gleam Code Search"),
@@ -180,7 +193,7 @@ fn search_form() -> Form(SearchForm) {
   })
 }
 
-fn search_form_view(form) {
+fn search_form_view(form: Form(SearchForm)) -> element.Element(b) {
   html.form([attribute.method("post"), attribute.action("/search")], [
     html.fieldset(
       [
