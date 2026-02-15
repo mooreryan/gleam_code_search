@@ -1,4 +1,7 @@
+import formal/form.{type Form}
 import gleam/erlang/process
+import gleam/http
+import gleam/list
 import gleam/option
 import lustre/attribute
 import lustre/element
@@ -6,6 +9,10 @@ import lustre/element/html
 import mist
 import wisp
 import wisp/wisp_mist
+
+const min_query_length = 3
+
+const max_query_length = 64
 
 type Context {
   Context(static_directory: String)
@@ -37,12 +44,42 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
 
   case wisp.path_segments(request) {
     [] -> {
-      let body = render_page(home_page(), title: option.None)
+      let empty_form = search_form()
+      let page = home_page(empty_form)
+      let body = render_page(page, title: option.None)
       wisp.html_response(body, 200)
+    }
+
+    ["search"] -> {
+      use <- wisp.require_method(request, http.Post)
+      use formdata <- wisp.require_form(request)
+
+      let form_result =
+        search_form() |> form.add_values(formdata.values) |> form.run
+
+      case form_result {
+        Ok(search_form) -> {
+          let fake_result = ["first matching line", "second matching line"]
+
+          let body = search_result_view(fake_result)
+          wisp.html_response(body, 200)
+        }
+        Error(form) -> {
+          // Rerender the home page, the form has errors now.
+          let body = render_page(home_page(form), title: option.None)
+          wisp.html_response(body, 422)
+        }
+      }
+
+      todo
     }
 
     _ -> wisp.not_found()
   }
+}
+
+fn search_result_view(fake_result: List(String)) -> String {
+  todo
 }
 
 fn middleware(
@@ -65,17 +102,33 @@ fn middleware(
   handle_request(request)
 }
 
-fn home_page() -> element.Element(a) {
+fn home_page(form) -> element.Element(a) {
   html.div([], [
     html.h1([attribute.class("text-2xl")], [
       html.text("Gleam Code Search"),
     ]),
-    form_view(),
+    search_form_view(form),
   ])
 }
 
-fn form_view() {
-  html.form([], [
+type SearchForm {
+  SearchForm(query: String)
+}
+
+fn search_form() -> Form(SearchForm) {
+  form.new({
+    use query <- form.field("query", {
+      form.parse_string
+      |> form.check_not_empty
+      |> form.check_string_length_more_than(min_query_length - 1)
+      |> form.check_string_length_less_than(max_query_length)
+    })
+    form.success(SearchForm(query:))
+  })
+}
+
+fn search_form_view(form) {
+  html.form([attribute.method("post"), attribute.action("/search")], [
     html.fieldset(
       [
         attribute.class(
@@ -96,13 +149,26 @@ fn form_view() {
             attribute.name("query"),
             attribute.id("query"),
             attribute.required(True),
-            attribute.minlength(3),
-            attribute.maxlength(64),
+            attribute.minlength(min_query_length),
+            attribute.maxlength(max_query_length),
+            attribute.value(form.field_value(form, "query")),
             attribute.class("input validator font-mono"),
           ]),
+
+          // HTML5 validation errors
           html.span([attribute.class("validator-hint font-bold")], [
             html.text("⚠️ Must be between 3 and 64 characters"),
           ]),
+
+          // Any backend form errors
+          html.div(
+            [],
+            list.map(form.field_error_messages(form, "query"), fn(msg) {
+              html.p([attribute.class("text-error")], [
+                element.text(msg),
+              ])
+            }),
+          ),
         ]),
 
         html.button(
