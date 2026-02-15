@@ -68,7 +68,7 @@ fn middleware(
 fn home_page() -> element.Element(a) {
   html.div([], [
     html.h1([attribute.class("text-2xl")], [
-      html.text("Client-Side Form Validation!"),
+      html.text("Gleam Code Search"),
     ]),
     form_view(),
   ])
@@ -84,44 +84,24 @@ fn form_view() {
       ],
       [
         html.legend([attribute.class("fieldset-legend")], [
-          html.text("Leave a review!"),
+          html.text("Search"),
         ]),
 
         html.div([], [
-          html.label([attribute.for("title"), attribute.class("label")], [
-            html.text("Title"),
+          html.label([attribute.for("query"), attribute.class("label")], [
+            html.text("Query"),
           ]),
           html.input([
             attribute.type_("text"),
-            attribute.name("title"),
-            attribute.id("title"),
+            attribute.name("query"),
+            attribute.id("query"),
             attribute.required(True),
-            attribute.minlength(2),
+            attribute.minlength(3),
             attribute.maxlength(64),
-            attribute.class("input validator"),
+            attribute.class("input validator font-mono"),
           ]),
           html.span([attribute.class("validator-hint font-bold")], [
-            html.text("⚠️ Must be between 2 and 64 characters"),
-          ]),
-        ]),
-
-        html.div([], [
-          html.label([attribute.for("review"), attribute.class("label")], [
-            html.text("Review"),
-          ]),
-          html.textarea(
-            [
-              attribute.name("review"),
-              attribute.id("review"),
-              attribute.required(False),
-              attribute.minlength(5),
-              attribute.maxlength(256),
-              attribute.class("textarea validator"),
-            ],
-            "",
-          ),
-          html.span([attribute.class("validator-hint font-bold")], [
-            html.text("⚠️ Must be between 5 and 256 characters"),
+            html.text("⚠️ Must be between 3 and 64 characters"),
           ]),
         ]),
 
