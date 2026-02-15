@@ -100,9 +100,13 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
 
           case search_result {
             Ok(search_results) -> {
+              let sorted_search_results =
+                list.sort(search_results, fn(a, b) {
+                  string.compare(a.file, b.file)
+                })
               let body =
                 render_page(
-                  search_results_page(search_results),
+                  search_results_page(sorted_search_results),
                   title: Some("Search Results"),
                 )
               wisp.html_response(body, 200)
@@ -128,24 +132,50 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
 fn search_results_page(
   search_results: List(cli.SearchResult),
 ) -> element.Element(a) {
-  html.div([], [
-    html.h2([], [
+  html.div([attribute.class("space-y-6")], [
+    html.h2([attribute.class("text-2xl font-bold")], [
       html.text("Search Results"),
     ]),
-    html.div([], list.map(search_results, search_result_view)),
+    html.p([], [
+      html.text("Total results: "),
+      html.text(int.to_string(list.length(search_results))),
+    ]),
+    html.div(
+      [attribute.class("space-y-4")],
+      list.map(search_results, search_result_view),
+    ),
   ])
 }
 
 fn search_result_view(search_result: cli.SearchResult) -> element.Element(a) {
-  // TODO: strip the specific folders from the filename, but leave the package folder.
-  html.div([], [
-    html.h3([], [html.text(search_result.file)]),
-    html.p([], [
-      html.text("Line: "),
-      html.text(int.to_string(search_result.line_index + 1)),
-    ]),
-    html.pre([], [html.code([], [html.text(search_result.line_with_context)])]),
-  ])
+  html.div(
+    [attribute.class("bg-base-200 border-base-300 rounded-box border p-4")],
+    [
+      html.h3([attribute.class("font-mono text-sm text-primary font-bold")], [
+        html.text(clean_file_name(search_result.file)),
+      ]),
+      html.p([attribute.class("text-xs text-base-content/70 mt-2")], [
+        html.text("Line: "),
+        html.text(int.to_string(search_result.line_index + 1)),
+      ]),
+      html.pre(
+        [attribute.class("bg-base-300 rounded p-3 mt-3 overflow-x-auto")],
+        [
+          html.code([attribute.class("text-sm")], [
+            html.text(search_result.line_with_context),
+          ]),
+        ],
+      ),
+    ],
+  )
+}
+
+// TODO: this will need to change based on the actual production index location
+fn clean_file_name(file_name: String) -> String {
+  case string.split(file_name, "/tb/") {
+    [_dir, good_part] -> good_part
+    _ -> "unknown"
+  }
 }
 
 fn middleware(
@@ -170,7 +200,7 @@ fn middleware(
 
 fn home_page(form: Form(SearchForm)) -> element.Element(a) {
   html.div([], [
-    html.h1([attribute.class("text-2xl")], [
+    html.h1([attribute.class("text-2xl font-bold")], [
       html.text("Gleam Code Search"),
     ]),
     search_form_view(form),
