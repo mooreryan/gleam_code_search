@@ -1,8 +1,15 @@
+import codesearch/cli
+import codesearch/index.{type Index}
+import envoy
 import formal/form.{type Form}
+import gleam/dict
 import gleam/erlang/process
 import gleam/http
+import gleam/int
 import gleam/list
-import gleam/option
+import gleam/option.{Some}
+import gleam/string
+import iv
 import lustre/attribute
 import lustre/element
 import lustre/element/html
@@ -15,20 +22,38 @@ const min_query_length = 3
 const max_query_length = 64
 
 type Context {
-  Context(static_directory: String)
+  // TODO: when you read the big json, it takes a lot of ram (5gb?), but when
+  // you stick the index in the context that gets handed off to the handler,
+  // somehow things get up to like 10gb of ram. I think you probably shouldn't
+  // be sending lots of data through the context like this.
+  Context(static_directory: String, index: Index)
 }
 
 fn static_directory() -> String {
-  let assert Ok(priv_directory) = wisp.priv_directory("server") |> echo
+  let assert Ok(priv_directory) = wisp.priv_directory("server")
   priv_directory <> "/static"
 }
 
 pub fn main() -> Nil {
   wisp.configure_logger()
+  wisp.set_logger_level(wisp.DebugLevel)
 
   let secret_key_base = wisp.random_string(64)
 
-  let context = Context(static_directory: static_directory())
+  let assert Ok(index_path) = envoy.get("GLEAM_CODESEARCH_INDEX")
+    as "env var GLEAM_CODESEARCH_INDEX was not set"
+
+  wisp.log_debug("Reading index")
+  let assert Ok(index) = cli.read_index(index_path)
+    as "failed to read and parse index"
+
+  let context =
+    Context(
+      static_directory: static_directory(),
+      // Make a fake index for now to see if the mem goes down when we don't put
+      // it in the context....and yeah, it does.
+      index: index.Index(files: iv.new(), trigrams: dict.new()),
+    )
 
   let assert Ok(_) =
     wisp_mist.handler(handle_request(_, context), secret_key_base)
@@ -59,10 +84,23 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
 
       case form_result {
         Ok(search_form) -> {
-          let fake_result = ["first matching line", "second matching line"]
+          wisp.log_debug("searching query: " <> search_form.query)
+          let search_result = cli.search_query(search_form.query, context.index)
 
-          let body = search_result_view(fake_result)
-          wisp.html_response(body, 200)
+          case search_result {
+            Ok(search_results) -> {
+              let body =
+                render_page(
+                  search_results_page(search_results),
+                  title: Some("Search Results"),
+                )
+              wisp.html_response(body, 200)
+            }
+            Error(errors) -> {
+              wisp.log_error(string.join(errors, ";"))
+              wisp.internal_server_error()
+            }
+          }
         }
         Error(form) -> {
           // Rerender the home page, the form has errors now.
@@ -70,16 +108,31 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
           wisp.html_response(body, 422)
         }
       }
-
-      todo
     }
 
     _ -> wisp.not_found()
   }
 }
 
-fn search_result_view(fake_result: List(String)) -> String {
-  todo
+fn search_results_page(search_results: List(cli.SearchResult)) {
+  html.div([], [
+    html.h2([], [
+      html.text("Search Results"),
+    ]),
+    html.div([], list.map(search_results, search_result_view)),
+  ])
+}
+
+fn search_result_view(search_result: cli.SearchResult) -> element.Element(a) {
+  // TODO: strip the specific folders from the filename, but leave the package folder.
+  html.div([], [
+    html.h3([], [html.text(search_result.file)]),
+    html.p([], [
+      html.text("Line: "),
+      html.text(int.to_string(search_result.line_index + 1)),
+    ]),
+    html.pre([], [html.code([], [html.text(search_result.line_with_context)])]),
+  ])
 }
 
 fn middleware(
@@ -190,7 +243,7 @@ fn layout(
 ) -> element.Element(a) {
   let title = case title {
     option.None -> "Hello, World!"
-    option.Some(title) -> title <> " | Hello, World!"
+    Some(title) -> title <> " | Hello, World!"
   }
 
   html.html([attribute.attribute("lang", "en")], [

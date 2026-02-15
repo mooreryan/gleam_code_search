@@ -7,6 +7,7 @@ import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
+import gleam/result
 import gleam/set
 import gleam/string
 import gleam/time/calendar
@@ -98,6 +99,90 @@ pub fn main() -> Nil {
   log("Done")
 
   Nil
+}
+
+// TODO: use this in the cli too...
+pub fn read_index(index_path) {
+  use index_json <- result.try(
+    simplifile.read(index_path) |> result.map_error(simplifile.describe_error),
+  )
+  // TODO: better show function for decode errors
+  json.parse(index_json, index.decoder()) |> result.map_error(string.inspect)
+}
+
+pub type SearchResult {
+  SearchResult(file: String, line_index: Int, line_with_context: String)
+}
+
+// TODO: use this in the CLI too...
+// TODO: move this into a different module, as its also used in the server
+pub fn search_query(
+  query: String,
+  index: index.Index,
+) -> Result(List(SearchResult), List(String)) {
+  use query_trigrams <- result.try(
+    index_corpus.unique_trigrams(query)
+    |> result.replace_error(["no unique trigrams"]),
+  )
+
+  log("Searching index")
+  let file_indices = get_putative_file_indices(index.trigrams, query_trigrams)
+
+  log("Searching hits")
+  case file_indices {
+    // No search results
+    Error(Nil) -> Error(["no search results"])
+
+    // We had some search results
+    Ok(file_indices) -> {
+      let #(search_results, errors) =
+        set.fold(file_indices, [], fn(acc, file_index) {
+          case read_file_from_index(index.files, file_index) {
+            Error(e) -> [Error(e), ..acc]
+            Ok(#(file, data)) -> {
+              let lines = string.split(data, on: "\n")
+
+              let line_indices = get_matching_line_indices(lines, query)
+
+              let lines_with_context =
+                line_indices
+                |> list.map(get_line_and_context(lines, _))
+                |> list.map(fn(x) {
+                  let #(line_index, line_with_context) = x
+                  SearchResult(file:, line_index:, line_with_context:)
+                })
+
+              [Ok(lines_with_context), ..acc]
+            }
+          }
+        })
+        |> result.partition
+
+      case errors {
+        [] -> Ok(list.flatten(search_results))
+
+        errors -> Error(errors)
+      }
+    }
+  }
+}
+
+fn read_file_from_index(
+  files: iv.Array(String),
+  at_index: Int,
+) -> Result(#(String, String), String) {
+  use file <- result.try(
+    iv.get(files, at_index)
+    |> result.replace_error(
+      "failed to get file at index "
+      <> int.to_string(at_index)
+      <> " which should be impossible",
+    ),
+  )
+  use data <- result.try(
+    simplifile.read(file) |> result.map_error(simplifile.describe_error),
+  )
+  Ok(#(file, data))
 }
 
 fn get_file_indices(trigrams, trigram) {
