@@ -1,11 +1,11 @@
-import codesearch/index_corpus
+import codesearch/trigrams
 import gleam/bit_array
 import gleam/list
 import gleam/result
 
 fn trigram_list_from_string(string: String) -> Result(List(String), Nil) {
   bit_array.from_string(string)
-  |> index_corpus.fold_trigrams(from: [], with: fn(acc, trigram) {
+  |> trigrams.fold_trigrams(from: [], with: fn(acc, trigram) {
     [trigram, ..acc]
   })
   |> result.map(list.reverse)

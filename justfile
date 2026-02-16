@@ -7,6 +7,9 @@ total_file_size dir:
 check:
     cd codesearch && gleam check && cd ../server && gleam check
 
+test:
+    cd codesearch && gleam test && cd ../server && gleam test
+
 server_dev:
     cd server && \
     watchexec \

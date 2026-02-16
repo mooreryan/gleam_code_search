@@ -1,15 +1,13 @@
 import argv
 import codesearch/index.{type Index, Index}
+import codesearch/trigrams
 import filepath
-import gleam/bit_array
-import gleam/dict.{type Dict}
-import gleam/erlang/atom
+import gleam/dict
 import gleam/int
-import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
-import gleam/set.{type Set}
+import gleam/set
 import gleam/string
 import gleam/time/calendar
 import gleam/time/timestamp
@@ -42,7 +40,7 @@ pub fn main() {
 
   logging.log(logging.Info, "Writing index json")
   use Nil <- result.try(
-    write_index(index, config.outfile)
+    write_index_binary(index, config.outfile)
     |> result.map_error(simplifile.describe_error),
   )
 
@@ -141,14 +139,13 @@ fn process_corpus_files(corpus_files: List(String)) -> Result(Index, String) {
   }
 }
 
-fn write_index(
+fn write_index_binary(
   index: Index,
   outfile: String,
 ) -> Result(Nil, simplifile.FileError) {
   index
-  |> index.to_json
-  |> json.to_string
-  |> simplifile.write(to: outfile, contents: _)
+  |> index.serialize
+  |> simplifile.write_bits(to: outfile, bits: _)
 }
 
 // TODO: need to get the gleam.toml and then look for things in those dirs right on <blah>/src
@@ -183,12 +180,6 @@ fn debug(x: a, msg: String) {
   x
 }
 
-@external(erlang, "erlang", "memory")
-fn memory() -> List(#(atom.Atom, Int))
-
-@external(erlang, "erlang", "garbage_collect")
-fn garbage_collect() -> Bool
-
 // Note: building the index with a List(Int) rather than Set(Int) is a bit
 // faster, but uses a lot more memory, since you have to store more copies of
 // each file_index.  So, keep it a set ;)
@@ -209,7 +200,7 @@ fn index_file(index: index.Index, file: String, file_index: Int) {
 
     Ok(data) -> {
       debug(Nil, "Get unique trigrams")
-      let trigrams = unique_trigrams(data)
+      let trigrams = trigrams.unique_trigrams(data)
 
       case trigrams {
         // We found no trigrams, return index unchanged
@@ -253,49 +244,4 @@ fn index_file(index: index.Index, file: String, file_index: Int) {
       }
     }
   }
-}
-
-pub fn unique_trigrams(data: BitArray) -> Result(Set(String), Nil) {
-  data
-  |> fold_trigrams(from: set.new(), with: fn(acc, trigram) {
-    set.insert(acc, trigram)
-  })
-}
-
-@internal
-pub fn fold_trigrams(
-  over bit_array: BitArray,
-  from initial: a,
-  with fun: fn(a, String) -> a,
-) -> Result(a, Nil) {
-  case bit_array {
-    <<a:utf8_codepoint, b:utf8_codepoint, c:utf8_codepoint, rest:bytes>> ->
-      Ok(do_fold_trigrams(a, b, c, rest, initial, fun))
-    _ -> Error(Nil)
-  }
-}
-
-fn do_fold_trigrams(
-  a: UtfCodepoint,
-  b: UtfCodepoint,
-  c: UtfCodepoint,
-  rest: BitArray,
-  acc: acc,
-  fun: fn(acc, String) -> acc,
-) -> acc {
-  let acc = case is_ascii(a) && is_ascii(b) && is_ascii(c) {
-    True -> fun(acc, string.from_utf_codepoints([a, b, c]))
-    False -> acc
-  }
-
-  case rest {
-    <<d:utf8_codepoint, rest:bytes>> -> {
-      do_fold_trigrams(b, c, d, rest, acc, fun)
-    }
-    _ -> acc
-  }
-}
-
-fn is_ascii(codepoint: UtfCodepoint) -> Bool {
-  string.utf_codepoint_to_int(codepoint) < 128
 }

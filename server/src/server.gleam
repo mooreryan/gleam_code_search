@@ -1,15 +1,13 @@
-import codesearch/cli
 import codesearch/index.{type Index}
+import codesearch/log
 import envoy
 import formal/form.{type Form}
-import gleam/dict
 import gleam/erlang/process
 import gleam/http
 import gleam/int
 import gleam/list
 import gleam/option.{Some}
 import gleam/string
-import iv
 import lustre/attribute
 import lustre/element
 import lustre/element/html
@@ -22,10 +20,6 @@ const min_query_length: Int = 3
 const max_query_length: Int = 64
 
 type Context {
-  // TODO: when you read the big json, it takes a lot of ram (5gb?), but when
-  // you stick the index in the context that gets handed off to the handler,
-  // somehow things get up to like 10gb of ram. I think you probably shouldn't
-  // be sending lots of data through the context like this.
   Context(static_directory: String)
 }
 
@@ -58,11 +52,18 @@ pub fn main() -> Nil {
   let assert Ok(index_path) = envoy.get("GLEAM_CODESEARCH_INDEX")
     as "env var GLEAM_CODESEARCH_INDEX was not set"
 
+  log.debug("Reading index")
+
   wisp.log_debug("Reading index")
-  let assert Ok(index) = cli.read_index(index_path)
+  // let assert Ok(index) = cli.read_index(index_path)
+  //   as "failed to read and parse index"
+  let assert Ok(index) = index.read_binary(index_path)
     as "failed to read and parse index"
 
+  log.debug("Putting index")
+
   put_index(index)
+  log.debug("Starting server")
 
   let context = Context(static_directory: static_directory())
 
@@ -96,7 +97,7 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
       case form_result {
         Ok(search_form) -> {
           wisp.log_debug("searching query: " <> search_form.query)
-          let search_result = cli.search_query(search_form.query, get_index())
+          let search_result = index.search_query(search_form.query, get_index())
 
           case search_result {
             Ok(search_results) -> {
@@ -130,7 +131,7 @@ fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
 }
 
 fn search_results_page(
-  search_results: List(cli.SearchResult),
+  search_results: List(index.SearchResult),
 ) -> element.Element(a) {
   html.div([attribute.class("space-y-6")], [
     html.h2([attribute.class("text-2xl font-bold")], [
@@ -147,7 +148,7 @@ fn search_results_page(
   ])
 }
 
-fn search_result_view(search_result: cli.SearchResult) -> element.Element(a) {
+fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
   html.div(
     [attribute.class("bg-base-200 border-base-300 rounded-box border p-4")],
     [
