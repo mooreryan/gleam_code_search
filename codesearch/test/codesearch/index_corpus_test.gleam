@@ -43,3 +43,35 @@ pub fn fold_trigrams__7_letters__test() {
   assert trigram_list_from_string("abcdefg")
     == Ok(["abc", "bcd", "cde", "def", "efg"])
 }
+
+pub fn fold_trigrams__only_emoji__test() {
+  assert trigram_list_from_string("🍕🍕🍕") == Ok([])
+}
+
+pub fn fold_trigrams__emoji_in_middle__test() {
+  assert trigram_list_from_string("ab🍕cd") == Ok([])
+}
+
+pub fn fold_trigrams__ascii_separated_by_emoji__test() {
+  assert trigram_list_from_string("abc🍕def") == Ok(["abc", "def"])
+}
+
+pub fn fold_trigrams__division_sign_in_middle__test() {
+  assert trigram_list_from_string("a÷b") == Ok([])
+}
+
+pub fn fold_trigrams__ascii_separated_by_division__test() {
+  assert trigram_list_from_string("abc÷defg") == Ok(["abc", "def", "efg"])
+}
+
+pub fn fold_trigrams__mixed_non_ascii__test() {
+  assert trigram_list_from_string("ab÷🍕cd") == Ok([])
+}
+
+pub fn fold_trigrams__ascii_before_non_ascii__test() {
+  assert trigram_list_from_string("abcd🍕") == Ok(["abc", "bcd"])
+}
+
+pub fn fold_trigrams__non_ascii_before_ascii__test() {
+  assert trigram_list_from_string("🍕abcd") == Ok(["abc", "bcd"])
+}

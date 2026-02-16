@@ -283,7 +283,10 @@ fn do_fold_trigrams(
   acc: acc,
   fun: fn(acc, String) -> acc,
 ) -> acc {
-  let acc = fun(acc, string.from_utf_codepoints([a, b, c]))
+  let acc = case is_ascii(a) && is_ascii(b) && is_ascii(c) {
+    True -> fun(acc, string.from_utf_codepoints([a, b, c]))
+    False -> acc
+  }
 
   case rest {
     <<d:utf8_codepoint, rest:bytes>> -> {
@@ -291,4 +294,8 @@ fn do_fold_trigrams(
     }
     _ -> acc
   }
+}
+
+fn is_ascii(codepoint: UtfCodepoint) -> Bool {
+  string.utf_codepoint_to_int(codepoint) < 128
 }
