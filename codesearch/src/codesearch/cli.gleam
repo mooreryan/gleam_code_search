@@ -2,6 +2,7 @@ import argv
 import codesearch/index
 import codesearch/index_corpus
 import envoy
+import gleam/bit_array
 import gleam/dict
 import gleam/int
 import gleam/io
@@ -48,7 +49,9 @@ pub fn main() -> Nil {
   }
 
   log("Parsing query")
-  let query_trigrams = case index_corpus.unique_trigrams(query) {
+  let query_trigrams = case
+    index_corpus.unique_trigrams(bit_array.from_string(query))
+  {
     Ok(x) -> x
     Error(Nil) -> panic as "query was to short to generate a single trigram"
   }
@@ -121,7 +124,9 @@ pub fn search_query(
   index: index.Index,
 ) -> Result(List(SearchResult), List(String)) {
   use query_trigrams <- result.try(
-    index_corpus.unique_trigrams(query)
+    query
+    |> bit_array.from_string
+    |> index_corpus.unique_trigrams
     |> result.replace_error(["no unique trigrams"]),
   )
 

@@ -1,8 +1,11 @@
 file_size dir:
-    fd -t f . {{ dir }} --exec stat -f%z {}
+    fd -t f . {{ dir }} --exec stat -f'%z %N' {}
 
 total_file_size dir:
     fd -t f . {{ dir }} --exec stat -f%z {} | awk '{sum+=$1} END {print sum}'
+
+check:
+    cd codesearch && gleam check && cd ../server && gleam check
 
 server_dev:
     cd server && \

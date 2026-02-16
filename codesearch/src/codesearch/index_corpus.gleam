@@ -2,7 +2,8 @@ import argv
 import codesearch/index.{type Index, Index}
 import filepath
 import gleam/bit_array
-import gleam/dict
+import gleam/dict.{type Dict}
+import gleam/erlang/atom
 import gleam/int
 import gleam/json
 import gleam/list
@@ -182,6 +183,15 @@ fn debug(x: a, msg: String) {
   x
 }
 
+@external(erlang, "erlang", "memory")
+fn memory() -> List(#(atom.Atom, Int))
+
+@external(erlang, "erlang", "garbage_collect")
+fn garbage_collect() -> Bool
+
+// Note: building the index with a List(Int) rather than Set(Int) is a bit
+// faster, but uses a lot more memory, since you have to store more copies of
+// each file_index.  So, keep it a set ;)
 fn index_file(index: index.Index, file: String, file_index: Int) {
   logging.log(
     logging.Debug,
@@ -198,42 +208,58 @@ fn index_file(index: index.Index, file: String, file_index: Int) {
     }
 
     Ok(data) -> {
-      debug(Nil, "to graphemes")
+      debug(Nil, "Get unique trigrams")
+      let trigrams = unique_trigrams(data)
 
-      let result =
-        data
-        |> fold_trigrams(index, fn(index, trigram) {
-          Index(
-            ..index,
-            trigrams: dict.upsert(
-              index.trigrams,
-              update: trigram,
-              with: fn(maybe_file_indices) {
-                case maybe_file_indices {
-                  Some(file_indices) -> set.insert(file_indices, file_index)
-                  None -> set.from_list([file_index])
-                }
-              },
-            ),
-          )
-        })
-        |> debug("done")
-
-      // If there is an error, that means there were too few characters to get
-      // even one trigram, so simply return the index unchanged.
-      case result {
-        Ok(index) -> index
+      case trigrams {
+        // We found no trigrams, return index unchanged
         Error(Nil) -> index
+
+        Ok(trigrams) -> {
+          debug(Nil, "Update index")
+          // Update the index one time per unique trigram, as opposed to doing
+          // it for each trigram. Saves a bit of time/memory.
+          let index =
+            Index(
+              ..index,
+              trigrams: set.fold(
+                over: trigrams,
+                from: index.trigrams,
+                with: fn(acc, trigram) {
+                  dict.upsert(
+                    acc,
+                    update: trigram,
+                    with: fn(maybe_file_indices) {
+                      case maybe_file_indices {
+                        Some(file_indices) ->
+                          set.insert(file_indices, file_index)
+                        None -> set.from_list([file_index])
+                      }
+                    },
+                  )
+                },
+              ),
+            )
+
+          // This does keep the memory down, but it makes it significantly
+          // slower... D:
+          // debug(Nil, "Collect garbage")
+          // garbage_collect()
+
+          debug(Nil, "Done")
+
+          index
+        }
       }
     }
   }
 }
 
-pub fn unique_trigrams(string: String) -> Result(Set(String), Nil) {
-  bit_array.from_string(string)
-  |> fold_trigrams(from: [], with: fn(acc, trigram) { [trigram, ..acc] })
-  |> result.map(list.reverse)
-  |> result.map(set.from_list)
+pub fn unique_trigrams(data: BitArray) -> Result(Set(String), Nil) {
+  data
+  |> fold_trigrams(from: set.new(), with: fn(acc, trigram) {
+    set.insert(acc, trigram)
+  })
 }
 
 @internal
