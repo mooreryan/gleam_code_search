@@ -274,12 +274,19 @@ fn search_results_page(
       html.text("Total results: "),
       html.text(int.to_string(total_results)),
     ]),
-    pagination_nav_view(current_page:, total_pages:, query:),
-    html.div(
-      [attribute.class("space-y-4")],
-      list.map(search_results, search_result_view),
-    ),
-    pagination_nav_view(current_page:, total_pages:, query:),
+
+    case total_results > 0 {
+      False -> html.div([], [])
+      True ->
+        html.div([], [
+          pagination_nav_view(current_page:, total_pages:, query:),
+          html.div(
+            [attribute.class("space-y-4")],
+            list.map(search_results, search_result_view),
+          ),
+          pagination_nav_view(current_page:, total_pages:, query:),
+        ])
+    },
   ])
 }
 
@@ -360,7 +367,7 @@ fn pagination_nav_view(
       ],
     )
 
-  html.div([attribute.class("flex items-center gap-4 text-xs")], [
+  html.div([attribute.class("flex items-center gap-4 text-xs py-2")], [
     first,
     prev,
     current,
