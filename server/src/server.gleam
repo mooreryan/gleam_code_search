@@ -443,10 +443,6 @@ fn search_form_view(form: Form(SearchForm)) -> element.Element(b) {
             [attribute.type_("submit"), attribute.class("btn btn-primary mt-4")],
             [html.text("Submit")],
           ),
-          html.button(
-            [attribute.type_("reset"), attribute.class("btn btn-ghost mt-1")],
-            [html.text("Cancel")],
-          ),
         ],
       ),
     ],
