@@ -267,17 +267,9 @@ pub fn search_query(
                   acc
                 }
                 _ -> {
-                  let line_indices = get_matching_line_indices(lines, query)
+                  let search_results = get_matches(file, lines, query)
 
-                  let lines_with_context =
-                    line_indices
-                    |> list.map(get_line_and_context(lines, _))
-                    |> list.map(fn(x) {
-                      let #(line_index, line_with_context) = x
-                      SearchResult(file:, line_index:, line_with_context:)
-                    })
-
-                  [Ok(lines_with_context), ..acc]
+                  [Ok(search_results), ..acc]
                 }
               }
             }
@@ -340,36 +332,117 @@ fn read_file_from_index(
   Ok(#(file, data))
 }
 
-fn get_matching_line_indices(lines, query) {
-  list.index_fold(lines, [], fn(acc, line, line_index) {
-    case string.contains(does: line, contain: query) {
-      True -> [line_index, ..acc]
-      False -> acc
-    }
-  })
-  |> list.reverse
+type PendingSearchResult {
+  PendingSearchResult(
+    file: String,
+    line_index: Int,
+    line: String,
+    prefix_reversed: List(String),
+    suffix_reversed: List(String),
+    need: Int,
+  )
 }
 
-fn get_line_and_context(lines: List(String), index: Int) -> #(Int, String) {
-  let lines = iv.from_list(lines)
-
-  let #(min, max) =
-    get_range(index, min_line_index: 0, max_line_index: iv.size(lines) - 1)
-
-  // If this is an Error, it's a logic bug. So assert is fine.
-  let assert Ok(slice) = iv.slice(lines, start: min, size: max - min + 1)
-
-  let hit_with_context = iv.to_list(slice) |> string.join("\n")
-
-  #(index, hit_with_context)
+fn push_suffix_line(
+  pending: PendingSearchResult,
+  line: String,
+) -> PendingSearchResult {
+  case pending.need {
+    0 -> pending
+    _ ->
+      PendingSearchResult(..pending, need: pending.need - 1, suffix_reversed: [
+        line,
+        ..pending.suffix_reversed
+      ])
+  }
 }
 
-fn get_range(
-  index: Int,
-  min_line_index min_line_index: Int,
-  max_line_index max_line_index: Int,
-) -> #(Int, Int) {
-  let min = int.max(min_line_index, index - 3)
-  let max = int.min(max_line_index, index + 8)
-  #(min, max)
+fn is_done(pending: PendingSearchResult) -> Bool {
+  pending.need == 0
+}
+
+fn finalize(pending: PendingSearchResult) -> SearchResult {
+  let prefix = list.reverse(pending.prefix_reversed)
+  let suffix = list.reverse(pending.suffix_reversed)
+
+  let line_with_context =
+    [prefix, [pending.line], suffix] |> list.flatten |> string.join("\n")
+
+  SearchResult(
+    file: pending.file,
+    line_index: pending.line_index,
+    line_with_context:,
+  )
+}
+
+// TODO: sometimes the reading of the very big file is still slow.
+
+// This is kinda tricky, but basically, we need to go over the lines just once,
+// but still keep the context. Converting to an iv.Array and getting context
+// that way is too slow for the larger files.
+fn get_matches(
+  file: String,
+  lines: List(String),
+  query: String,
+) -> List(SearchResult) {
+  let prefix_line_count = 3
+  let suffix_line_count = 8
+
+  let #(completed_reversed, still_pending_reversed, _prefix_reversed) =
+    list.index_fold(lines, #([], [], []), fn(acc, line, line_index) {
+      let #(completed_reversed, still_pending_reversed, prefix_reversed) = acc
+
+      // We need to add this line to any pending items
+      let still_pending =
+        list.map(still_pending_reversed, push_suffix_line(_, line))
+
+      // Some of the pending ones may now be completed, so we need to handle
+      // them.
+      let #(ready_to_complete, still_pending) =
+        list.partition(still_pending, is_done)
+
+      let completed_reversed =
+        list.fold(ready_to_complete, completed_reversed, fn(completed, pending) {
+          [finalize(pending), ..completed]
+        })
+
+      // Check if the current line matches, if yes we need a new pending match
+      let still_pending = case string.contains(does: line, contain: query) {
+        True -> {
+          let new_pending =
+            PendingSearchResult(
+              file:,
+              line_index:,
+              line:,
+              prefix_reversed:,
+              suffix_reversed: [],
+              need: suffix_line_count,
+            )
+          [new_pending, ..still_pending]
+        }
+
+        // There is no match, so we don't change the still_pending list
+        False -> still_pending
+      }
+
+      // Now, update the prefix
+      let prefix_reversed = [line, ..prefix_reversed]
+      let prefix_reversed = list.take(prefix_reversed, prefix_line_count)
+
+      #(completed_reversed, still_pending, prefix_reversed)
+    })
+
+  // Now that we're here, there may still be some pending items that haven't
+  // yet been finalized because we hit the end of the file. So finalize those
+  // now.
+  let completed_reversed =
+    list.fold(
+      still_pending_reversed,
+      completed_reversed,
+      fn(completed_reversed, pending) {
+        [finalize(pending), ..completed_reversed]
+      },
+    )
+
+  list.reverse(completed_reversed)
 }
