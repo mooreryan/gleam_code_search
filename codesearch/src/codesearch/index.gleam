@@ -10,8 +10,9 @@ import gleam/string
 import iv.{type Array}
 import simplifile
 
-/// If file has more lines than this, we skip it.
-const max_file_lines: Int = 25_000
+/// Skip any files bigger than this
+///
+const max_file_size_bytes: Int = 500_000
 
 /// The type representing an index for a corpus
 ///
@@ -251,28 +252,46 @@ pub fn search_query(
         |> set.to_list
         |> list.sort(int.compare)
         |> list.fold([], fn(acc, file_index) {
-          case read_file_from_index(index.files, file_index) {
-            Error(e) -> [Error(e), ..acc]
-            Ok(#(file, data)) -> {
-              let lines = string.split(data, on: "\n")
+          let result = {
+            use file <- result.try(pull_file(index.files, file_index))
+            use file_info <- result.try(
+              simplifile.file_info(file)
+              |> result.map_error(simplifile.describe_error),
+            )
 
-              case list.length(lines) {
-                // TODO: adjust the index, or the search to actually handle
-                // bigger files reasonably well. As of now, including the "big"
-                // files can make the search take 30s.
-                count if count > max_file_lines -> {
-                  log_notice(
-                    "file too big (" <> int.to_string(count) <> "): " <> file,
-                  )
-                  acc
-                }
-                _ -> {
-                  let search_results = get_matches(file, lines, query)
+            case file_info.size > max_file_size_bytes {
+              True -> {
+                log_notice(
+                  "file too big ("
+                  <> int.to_string(file_info.size)
+                  <> " bytes): "
+                  <> file,
+                )
 
-                  [Ok(search_results), ..acc]
-                }
+                // If file is too big, don't treat it as an error, simply return
+                // the acc and move on to the next one.
+                Ok(acc)
+              }
+              False -> {
+                use file_data <- result.try(
+                  simplifile.read(file)
+                  |> result.map_error(simplifile.describe_error),
+                )
+                let lines = string.split(file_data, on: "\n")
+                let search_results = get_matches(file, lines, query)
+                // Wrapped in okay, because we're guarding against file
+                // operation errors.
+                Ok([Ok(search_results), ..acc])
               }
             }
+          }
+
+          case result {
+            // Something went wrong in one of the file operations
+            Error(msg) -> [Error(msg), ..acc]
+
+            // The file operations were okay
+            Ok(acc) -> acc
           }
         })
         |> result.partition
@@ -314,22 +333,13 @@ fn get_file_indices(trigrams, trigram) {
   }
 }
 
-fn read_file_from_index(
-  files: iv.Array(String),
-  at_index: Int,
-) -> Result(#(String, String), String) {
-  use file <- result.try(
-    iv.get(files, at_index)
-    |> result.replace_error(
-      "failed to get file at index "
-      <> int.to_string(at_index)
-      <> " which should be impossible",
-    ),
+fn pull_file(files: Array(String), at_index: Int) -> Result(String, String) {
+  iv.get(files, at_index)
+  |> result.replace_error(
+    "failed to get file at index "
+    <> int.to_string(at_index)
+    <> " which should be impossible",
   )
-  use data <- result.try(
-    simplifile.read(file) |> result.map_error(simplifile.describe_error),
-  )
-  Ok(#(file, data))
 }
 
 type PendingSearchResult {
