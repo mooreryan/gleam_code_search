@@ -6,10 +6,13 @@ import gleam/http.{Get, Post}
 import gleam/int
 import gleam/list
 import gleam/option.{Some}
+import gleam/otp/actor
 import gleam/otp/static_supervisor
+import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import gleam/uri
+import lifeguard
 import lustre/attribute
 import lustre/element
 import lustre/element/html
@@ -23,13 +26,21 @@ const max_query_length: Int = 64
 
 const page_size: Int = 25
 
+const searcher_call_timeout_millis: Int = 20_000
+
+const searcher_checkout_timeout_millis: Int = 5000
+
+const searcher_pool_size: Int = 2
+
+const searcher_startup_timeout_millis: Int = 5000
+
 pub fn main() -> Nil {
   process.sleep_forever()
 }
 
 pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
   wisp.configure_logger()
-  wisp.set_logger_level(wisp.DebugLevel)
+  wisp.set_logger_level(wisp.InfoLevel)
 
   // We don't use the secret key in this app, so just generate a random one at
   // start.
@@ -47,7 +58,9 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
 
   wisp.log_debug("Starting server")
 
-  let context = Context(static_directory: static_directory())
+  let searcher_name = process.new_name("server-searcher")
+
+  let context = Context(static_directory: static_directory(), searcher_name:)
 
   let server_child_specification =
     wisp_mist.handler(handle_request(_, context), secret_key_base)
@@ -57,6 +70,7 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
 
   let assert Ok(supervisor) =
     static_supervisor.new(static_supervisor.OneForOne)
+    |> static_supervisor.add(searcher(searcher_name))
     |> static_supervisor.add(server_child_specification)
     |> static_supervisor.start
 
@@ -67,8 +81,61 @@ pub fn stop(_: _) -> Nil {
   Nil
 }
 
+type SearcherMessage {
+  Search(
+    reply_to: process.Subject(Result(List(index.SearchResult), List(String))),
+    query: String,
+  )
+}
+
+fn searcher(
+  pool_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
+) -> supervision.ChildSpecification(static_supervisor.Supervisor) {
+  let lifeguard_child_spec =
+    lifeguard.new(pool_name, Nil)
+    |> lifeguard.on_message(fn(state, msg) {
+      case msg {
+        Search(reply_to:, query:) -> {
+          let search_result =
+            index.search_query(
+              query,
+              get_index(),
+              wisp.log_debug,
+              wisp.log_notice,
+            )
+
+          process.send(reply_to, search_result)
+          actor.continue(state)
+        }
+      }
+    })
+    |> lifeguard.size(searcher_pool_size)
+    |> lifeguard.supervised(timeout: searcher_startup_timeout_millis)
+
+  lifeguard_child_spec
+}
+
+fn search(
+  searcher_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
+  query: String,
+) -> Result(
+  Result(List(index.SearchResult), List(String)),
+  lifeguard.ApplyError,
+) {
+  lifeguard.call(
+    process.named_subject(searcher_name),
+    Search(reply_to: _, query:),
+    call_timeout: searcher_call_timeout_millis,
+    // TODO: I'm not 100% clear on how this interacts with the call_timout!
+    checkout_timeout: searcher_checkout_timeout_millis,
+  )
+}
+
 type Context {
-  Context(static_directory: String)
+  Context(
+    static_directory: String,
+    searcher_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
+  )
 }
 
 fn static_directory() -> String {
@@ -98,7 +165,7 @@ fn handle_request(request: Request, context: Context) -> Response {
     [], Get -> handle_home_page_request(request)
     [], _ -> wisp.method_not_allowed(allowed: [Get])
     ["search"], Post -> handle_search_post_request(request)
-    ["search"], Get -> handle_search_get_request(request)
+    ["search"], Get -> handle_search_get_request(request, context)
     ["search"], _ -> wisp.method_not_allowed(allowed: [Get, Post])
     _, _ -> wisp.not_found()
   }
@@ -134,47 +201,54 @@ fn handle_search_post_request(request: Request) -> Response {
   }
 }
 
-fn handle_search_get_request(request: Request) -> Response {
+fn handle_search_get_request(request: Request, context: Context) -> Response {
   use <- wisp.require_method(request, Get)
 
   let query_params = wisp.get_query(request)
 
   case parse_search_query_params(query_params) {
     Ok(SearchQueryParams(query:, page:)) -> {
-      wisp.log_debug("searching query: " <> query)
-      let search_result =
-        index.search_query(query, get_index(), wisp.log_debug, wisp.log_notice)
+      let search_result = search(context.searcher_name, query)
 
       case search_result {
-        Ok(search_results) -> {
-          // Paginate
-          let total_results = list.length(search_results)
+        Ok(search_result) -> {
+          case search_result {
+            Ok(search_results) -> {
+              // Paginate
+              let total_results = list.length(search_results)
 
-          // TODO: handle pages that are out of range
-          let search_results =
-            search_results
-            |> list.drop({ page - 1 } * page_size)
-            |> list.take(page_size)
+              // TODO: handle pages that are out of range
+              let search_results =
+                search_results
+                |> list.drop({ page - 1 } * page_size)
+                |> list.take(page_size)
 
-          // TODO: probably want a few tests for the pagination stuff!
-          let total_pages = { total_results + page_size - 1 } / page_size
+              // TODO: probably want a few tests for the pagination stuff!
+              let total_pages = { total_results + page_size - 1 } / page_size
 
-          render_page(
-            search_results_page(
-              current_page: page,
-              total_pages:,
-              total_results:,
-              search_results:,
-              query:,
-            ),
-            title: Some("Search Results"),
-          )
-          |> wisp.html_response(200)
+              render_page(
+                search_results_page(
+                  current_page: page,
+                  total_pages:,
+                  total_results:,
+                  search_results:,
+                  query:,
+                ),
+                title: Some("Search Results"),
+              )
+              |> wisp.html_response(200)
+            }
+
+            Error(errors) -> {
+              wisp.log_error(string.join(errors, ";"))
+              wisp.internal_server_error()
+            }
+          }
         }
-
-        Error(errors) -> {
-          wisp.log_error(string.join(errors, ";"))
-          wisp.internal_server_error()
+        Error(lifeguard.NoResourcesAvailable) -> {
+          render_page(no_workers_available_page(), title: Some("Too Busy"))
+          // TODO: include retry-after header
+          |> wisp.html_response(503)
         }
       }
     }
@@ -458,6 +532,21 @@ fn search_form_view(form: Form(SearchForm)) -> element.Element(b) {
       ),
     ],
   )
+}
+
+fn no_workers_available_page() -> element.Element(a) {
+  html.div([], [
+    html.h1([attribute.class("text-2xl font-bold")], [
+      html.text("Gleam Code Search"),
+    ]),
+    html.div([], [
+      html.p([], [
+        html.text(
+          "The server has too many requests right now.  Try again in a few moments!",
+        ),
+      ]),
+    ]),
+  ])
 }
 
 fn layout(

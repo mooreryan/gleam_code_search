@@ -26,3 +26,11 @@ server:
 
 server_small:
     cd server && npx @tailwindcss/cli -i ./assets/css/app.css -o ./priv/static/css/app.css --minify && GLEAM_CODESEARCH_INDEX="../_index/stdlib_index" gleam run
+
+search_a_lot:
+    #!/usr/bin/env bash
+    set -euxo pipefail
+
+    for i in {1..25}; do
+        curl 'http://localhost:4444/search?page=1&q=map' &
+    done

@@ -261,12 +261,12 @@ pub fn search_query(
 
             case file_info.size > max_file_size_bytes {
               True -> {
-                log_notice(
-                  "file too big ("
-                  <> int.to_string(file_info.size)
-                  <> " bytes): "
-                  <> file,
-                )
+                // log_notice(
+                //   "file too big ("
+                //   <> int.to_string(file_info.size)
+                //   <> " bytes): "
+                //   <> file,
+                // )
 
                 // If file is too big, don't treat it as an error, simply return
                 // the acc and move on to the next one.
