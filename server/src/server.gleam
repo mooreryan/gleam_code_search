@@ -326,7 +326,7 @@ fn pagination_nav_view(
 
     let btn_disabled = attribute.classes([#("btn-disabled", !enabled)])
 
-    html.a([attribute.class("btn btn-sm"), btn_disabled, attribute.href(href)], [
+    html.a([attribute.class("btn btn-xs"), btn_disabled, attribute.href(href)], [
       html.text(label),
     ])
   }
@@ -360,7 +360,7 @@ fn pagination_nav_view(
       ],
     )
 
-  html.div([attribute.class("flex items-center gap-4")], [
+  html.div([attribute.class("flex items-center gap-4 text-xs")], [
     first,
     prev,
     current,
@@ -549,6 +549,14 @@ fn no_workers_available_page() -> element.Element(a) {
   ])
 }
 
+fn nav_view() -> element.Element(a) {
+  html.nav([attribute.class("pb-4")], [
+    html.a([attribute.href("/"), attribute.class("btn btn-ghost")], [
+      html.text("Home"),
+    ]),
+  ])
+}
+
 fn layout(
   content: element.Element(a),
   title title: option.Option(String),
@@ -580,8 +588,9 @@ fn layout(
 ",
       ),
     ]),
-    html.body([], [
-      html.main([attribute.class("container mx-auto pt-4")], [
+    html.body([attribute.class("container mx-auto pt-4 p-2")], [
+      nav_view(),
+      html.main([attribute.class("")], [
         content,
       ]),
     ]),
