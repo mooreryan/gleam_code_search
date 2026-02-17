@@ -22,6 +22,9 @@ const max_query_length: Int = 64
 
 const page_size: Int = 25
 
+// TODO: cancel button doesn't actually cancel the search, probably change its
+// name to clear or something.
+
 pub fn main() -> Nil {
   wisp.configure_logger()
   wisp.set_logger_level(wisp.DebugLevel)
@@ -126,7 +129,8 @@ fn handle_search_get_request(request: Request) -> Response {
   case parse_search_query_params(query_params) {
     Ok(SearchQueryParams(query:, page:)) -> {
       wisp.log_debug("searching query: " <> query)
-      let search_result = index.search_query(query, get_index())
+      let search_result =
+        index.search_query(query, get_index(), wisp.log_debug, wisp.log_notice)
 
       case search_result {
         Ok(search_results) -> {

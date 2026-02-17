@@ -10,6 +10,9 @@ import gleam/string
 import iv.{type Array}
 import simplifile
 
+/// If file has more lines than this, we skip it.
+const max_file_lines: Int = 25_000
+
 /// The type representing an index for a corpus
 ///
 pub type Index {
@@ -219,6 +222,8 @@ pub type SearchResult {
 pub fn search_query(
   query: String,
   index: Index,
+  log_debug: fn(String) -> Nil,
+  log_notice: fn(String) -> Nil,
 ) -> Result(List(SearchResult), List(String)) {
   use query_trigrams <- result.try(
     query
@@ -235,6 +240,12 @@ pub fn search_query(
 
     // We had some search results
     Ok(file_indices) -> {
+      log_debug(
+        "starting search on "
+        <> int.to_string(set.size(file_indices))
+        <> " files",
+      )
+
       let #(search_results, errors) =
         file_indices
         |> set.to_list
@@ -245,17 +256,30 @@ pub fn search_query(
             Ok(#(file, data)) -> {
               let lines = string.split(data, on: "\n")
 
-              let line_indices = get_matching_line_indices(lines, query)
+              case list.length(lines) {
+                // TODO: adjust the index, or the search to actually handle
+                // bigger files reasonably well. As of now, including the "big"
+                // files can make the search take 30s.
+                count if count > max_file_lines -> {
+                  log_notice(
+                    "file too big (" <> int.to_string(count) <> "): " <> file,
+                  )
+                  acc
+                }
+                _ -> {
+                  let line_indices = get_matching_line_indices(lines, query)
 
-              let lines_with_context =
-                line_indices
-                |> list.map(get_line_and_context(lines, _))
-                |> list.map(fn(x) {
-                  let #(line_index, line_with_context) = x
-                  SearchResult(file:, line_index:, line_with_context:)
-                })
+                  let lines_with_context =
+                    line_indices
+                    |> list.map(get_line_and_context(lines, _))
+                    |> list.map(fn(x) {
+                      let #(line_index, line_with_context) = x
+                      SearchResult(file:, line_index:, line_with_context:)
+                    })
 
-              [Ok(lines_with_context), ..acc]
+                  [Ok(lines_with_context), ..acc]
+                }
+              }
             }
           }
         })
