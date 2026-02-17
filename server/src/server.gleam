@@ -6,6 +6,7 @@ import gleam/http.{Get, Post}
 import gleam/int
 import gleam/list
 import gleam/option.{Some}
+import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
 import gleam/uri
@@ -22,13 +23,16 @@ const max_query_length: Int = 64
 
 const page_size: Int = 25
 
-// TODO: cancel button doesn't actually cancel the search, probably change its
-// name to clear or something.
-
 pub fn main() -> Nil {
+  process.sleep_forever()
+}
+
+pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
   wisp.configure_logger()
   wisp.set_logger_level(wisp.DebugLevel)
 
+  // We don't use the secret key in this app, so just generate a random one at
+  // start.
   let secret_key_base = wisp.random_string(64)
 
   let assert Ok(index_path) = envoy.get("GLEAM_CODESEARCH_INDEX")
@@ -45,13 +49,22 @@ pub fn main() -> Nil {
 
   let context = Context(static_directory: static_directory())
 
-  let assert Ok(_) =
+  let server_child_specification =
     wisp_mist.handler(handle_request(_, context), secret_key_base)
     |> mist.new
     |> mist.port(4444)
-    |> mist.start
+    |> mist.supervised
 
-  process.sleep_forever()
+  let assert Ok(supervisor) =
+    static_supervisor.new(static_supervisor.OneForOne)
+    |> static_supervisor.add(server_child_specification)
+    |> static_supervisor.start
+
+  Ok(supervisor.pid)
+}
+
+pub fn stop(_: _) -> Nil {
+  Nil
 }
 
 type Context {
@@ -233,8 +246,6 @@ fn pagination_nav_view(
   query query: String,
 ) {
   let encoded_query = uri.percent_encode(query)
-
-  // TODO: in the actual search, handle the bad pages
 
   let page_link = fn(page: Int, label: String, enabled: Bool) {
     let href = "/search?page=" <> int.to_string(page) <> "&q=" <> encoded_query
