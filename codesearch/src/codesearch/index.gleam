@@ -3,13 +3,10 @@ import codesearch/trigrams
 import gleam/bit_array
 import gleam/dict.{type Dict}
 import gleam/int
-import gleam/io
 import gleam/list
 import gleam/result
 import gleam/set.{type Set}
 import gleam/string
-import gleam/time/calendar
-import gleam/time/timestamp
 import iv.{type Array}
 import simplifile
 
@@ -219,16 +216,6 @@ pub type SearchResult {
   SearchResult(file: String, line_index: Int, line_with_context: String)
 }
 
-// TODO: use the one true logger.
-fn log(msg: String) -> Nil {
-  let now =
-    timestamp.system_time() |> timestamp.to_rfc3339(calendar.local_offset())
-
-  let msg = now <> " " <> msg
-
-  io.println_error(msg)
-}
-
 pub fn search_query(
   query: String,
   index: Index,
@@ -240,10 +227,8 @@ pub fn search_query(
     |> result.replace_error(["no unique trigrams"]),
   )
 
-  log("Searching index")
   let file_indices = get_putative_file_indices(index.trigrams, query_trigrams)
 
-  log("Searching hits")
   case file_indices {
     // No search results
     Error(Nil) -> Error(["no search results"])
@@ -251,7 +236,10 @@ pub fn search_query(
     // We had some search results
     Ok(file_indices) -> {
       let #(search_results, errors) =
-        set.fold(file_indices, [], fn(acc, file_index) {
+        file_indices
+        |> set.to_list
+        |> list.sort(int.compare)
+        |> list.fold([], fn(acc, file_index) {
           case read_file_from_index(index.files, file_index) {
             Error(e) -> [Error(e), ..acc]
             Ok(#(file, data)) -> {

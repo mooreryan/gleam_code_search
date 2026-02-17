@@ -11,4 +11,4 @@
 - [x] Custom non-json format for index
 - [ ] Pagination for results
 - [x] Only index ascii characters
-- [ ] Unify the logging
+- [x] Unify the logging

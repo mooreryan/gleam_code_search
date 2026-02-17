@@ -1,5 +1,4 @@
 import codesearch/index.{type Index}
-import codesearch/log
 import envoy
 import formal/form.{type Form}
 import gleam/erlang/process
@@ -12,12 +11,41 @@ import lustre/attribute
 import lustre/element
 import lustre/element/html
 import mist
-import wisp
+import wisp.{type Request, type Response}
 import wisp/wisp_mist
 
 const min_query_length: Int = 3
 
 const max_query_length: Int = 64
+
+pub fn main() -> Nil {
+  wisp.configure_logger()
+  wisp.set_logger_level(wisp.DebugLevel)
+
+  let secret_key_base = wisp.random_string(64)
+
+  let assert Ok(index_path) = envoy.get("GLEAM_CODESEARCH_INDEX")
+    as "env var GLEAM_CODESEARCH_INDEX was not set"
+
+  wisp.log_debug("Reading index")
+  let assert Ok(index) = index.read_binary(index_path)
+    as "failed to read and parse index"
+
+  wisp.log_debug("Putting index")
+  put_index(index)
+
+  wisp.log_debug("Starting server")
+
+  let context = Context(static_directory: static_directory())
+
+  let assert Ok(_) =
+    wisp_mist.handler(handle_request(_, context), secret_key_base)
+    |> mist.new
+    |> mist.port(4444)
+    |> mist.start
+
+  process.sleep_forever()
+}
 
 type Context {
   Context(static_directory: String)
@@ -43,90 +71,56 @@ fn get_index() -> Index {
   do_get_index("server-index")
 }
 
-pub fn main() -> Nil {
-  wisp.configure_logger()
-  wisp.set_logger_level(wisp.DebugLevel)
-
-  let secret_key_base = wisp.random_string(64)
-
-  let assert Ok(index_path) = envoy.get("GLEAM_CODESEARCH_INDEX")
-    as "env var GLEAM_CODESEARCH_INDEX was not set"
-
-  log.debug("Reading index")
-
-  wisp.log_debug("Reading index")
-  // let assert Ok(index) = cli.read_index(index_path)
-  //   as "failed to read and parse index"
-  let assert Ok(index) = index.read_binary(index_path)
-    as "failed to read and parse index"
-
-  log.debug("Putting index")
-
-  put_index(index)
-  log.debug("Starting server")
-
-  let context = Context(static_directory: static_directory())
-
-  let assert Ok(_) =
-    wisp_mist.handler(handle_request(_, context), secret_key_base)
-    |> mist.new
-    |> mist.port(4444)
-    |> mist.start
-
-  process.sleep_forever()
-}
-
-fn handle_request(request: wisp.Request, context: Context) -> wisp.Response {
+fn handle_request(request: Request, context: Context) -> Response {
   use request <- middleware(request, context)
 
   case wisp.path_segments(request) {
-    [] -> {
-      let empty_form = search_form()
-      let page = home_page(empty_form)
-      let body = render_page(page, title: option.None)
-      wisp.html_response(body, 200)
-    }
+    [] -> handle_home_page_request(request)
+    ["search"] -> handle_search_request(request)
+    _ -> wisp.not_found()
+  }
+}
 
-    ["search"] -> {
-      use <- wisp.require_method(request, http.Post)
-      use formdata <- wisp.require_form(request)
+fn handle_home_page_request(request: Request) -> Response {
+  use <- wisp.require_method(request, http.Get)
+  let empty_form = search_form()
+  let page = home_page(empty_form)
+  let body = render_page(page, title: option.None)
+  wisp.html_response(body, 200)
+}
 
-      let form_result =
-        search_form() |> form.add_values(formdata.values) |> form.run
+fn handle_search_request(request: Request) -> Response {
+  use <- wisp.require_method(request, http.Post)
+  use formdata <- wisp.require_form(request)
 
-      case form_result {
-        Ok(search_form) -> {
-          wisp.log_debug("searching query: " <> search_form.query)
-          let search_result = index.search_query(search_form.query, get_index())
+  let form_result =
+    search_form() |> form.add_values(formdata.values) |> form.run
 
-          case search_result {
-            Ok(search_results) -> {
-              let sorted_search_results =
-                list.sort(search_results, fn(a, b) {
-                  string.compare(a.file, b.file)
-                })
-              let body =
-                render_page(
-                  search_results_page(sorted_search_results),
-                  title: Some("Search Results"),
-                )
-              wisp.html_response(body, 200)
-            }
-            Error(errors) -> {
-              wisp.log_error(string.join(errors, ";"))
-              wisp.internal_server_error()
-            }
-          }
+  case form_result {
+    Ok(search_form) -> {
+      wisp.log_debug("searching query: " <> search_form.query)
+      let search_result = index.search_query(search_form.query, get_index())
+
+      case search_result {
+        Ok(search_results) -> {
+          let body =
+            render_page(
+              search_results_page(search_results),
+              title: Some("Search Results"),
+            )
+          wisp.html_response(body, 200)
         }
-        Error(form) -> {
-          // Rerender the home page, the form has errors now.
-          let body = render_page(home_page(form), title: option.None)
-          wisp.html_response(body, 422)
+        Error(errors) -> {
+          wisp.log_error(string.join(errors, ";"))
+          wisp.internal_server_error()
         }
       }
     }
-
-    _ -> wisp.not_found()
+    Error(form) -> {
+      // Rerender the home page, the form has errors now.
+      let body = render_page(home_page(form), title: option.None)
+      wisp.html_response(body, 422)
+    }
   }
 }
 
@@ -180,10 +174,10 @@ fn clean_file_name(file_name: String) -> String {
 }
 
 fn middleware(
-  request: wisp.Request,
+  request: Request,
   context: Context,
-  handle_request: fn(wisp.Request) -> wisp.Response,
-) -> wisp.Response {
+  handle_request: fn(Request) -> Response,
+) -> Response {
   let request = wisp.method_override(request)
   use <- wisp.log_request(request)
   use <- wisp.rescue_crashes
