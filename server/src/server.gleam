@@ -2,11 +2,12 @@ import codesearch/index.{type Index}
 import envoy
 import formal/form.{type Form}
 import gleam/erlang/process
-import gleam/http
+import gleam/http.{Get, Post}
 import gleam/int
 import gleam/list
 import gleam/option.{Some}
 import gleam/string
+import gleam/uri
 import lustre/attribute
 import lustre/element
 import lustre/element/html
@@ -74,53 +75,70 @@ fn get_index() -> Index {
 fn handle_request(request: Request, context: Context) -> Response {
   use request <- middleware(request, context)
 
-  case wisp.path_segments(request) {
-    [] -> handle_home_page_request(request)
-    ["search"] -> handle_search_request(request)
-    _ -> wisp.not_found()
+  case wisp.path_segments(request), request.method {
+    [], Get -> handle_home_page_request(request)
+    [], _ -> wisp.method_not_allowed(allowed: [Get])
+    ["search"], Post -> handle_search_post_request(request)
+    ["search"], Get -> handle_search_get_request(request)
+    ["search"], _ -> wisp.method_not_allowed(allowed: [Get, Post])
+    _, _ -> wisp.not_found()
   }
 }
 
 fn handle_home_page_request(request: Request) -> Response {
-  use <- wisp.require_method(request, http.Get)
+  use <- wisp.require_method(request, Get)
   let empty_form = search_form()
   let page = home_page(empty_form)
   let body = render_page(page, title: option.None)
   wisp.html_response(body, 200)
 }
 
-fn handle_search_request(request: Request) -> Response {
-  use <- wisp.require_method(request, http.Post)
+fn handle_search_post_request(request: Request) -> Response {
+  use <- wisp.require_method(request, Post)
   use formdata <- wisp.require_form(request)
 
   let form_result =
     search_form() |> form.add_values(formdata.values) |> form.run
 
   case form_result {
-    Ok(search_form) -> {
-      wisp.log_debug("searching query: " <> search_form.query)
-      let search_result = index.search_query(search_form.query, get_index())
+    Ok(search_form) ->
+      wisp.redirect("/search?q=" <> uri.percent_encode(search_form.query))
+
+    Error(form) -> {
+      // Rerender the home page, the form has errors now.
+      let body = render_page(home_page(form), title: option.None)
+      wisp.html_response(body, 422)
+    }
+  }
+}
+
+fn handle_search_get_request(request: Request) -> Response {
+  use <- wisp.require_method(request, Get)
+
+  let query_params = wisp.get_query(request)
+
+  case parse_search_query_params(query_params) {
+    Ok(query) -> {
+      wisp.log_debug("searching query: " <> query)
+      let search_result = index.search_query(query, get_index())
 
       case search_result {
         Ok(search_results) -> {
-          let body =
-            render_page(
-              search_results_page(search_results),
-              title: Some("Search Results"),
-            )
-          wisp.html_response(body, 200)
+          render_page(
+            search_results_page(search_results),
+            title: Some("Search Results"),
+          )
+          |> wisp.html_response(200)
         }
+
         Error(errors) -> {
           wisp.log_error(string.join(errors, ";"))
           wisp.internal_server_error()
         }
       }
     }
-    Error(form) -> {
-      // Rerender the home page, the form has errors now.
-      let body = render_page(home_page(form), title: option.None)
-      wisp.html_response(body, 422)
-    }
+
+    Error(error) -> wisp.bad_request(error)
   }
 }
 
@@ -212,67 +230,95 @@ fn search_form() -> Form(SearchForm) {
       form.parse_string
       |> form.check_not_empty
       |> form.check_string_length_more_than(min_query_length - 1)
-      |> form.check_string_length_less_than(max_query_length)
+      |> form.check_string_length_less_than(max_query_length + 1)
     })
     form.success(SearchForm(query:))
   })
 }
 
+/// This one is for parsing the search query when it is encoded in a query
+/// string.
+///
+fn parse_search_query_params(
+  query_params: List(#(String, String)),
+) -> Result(String, String) {
+  case query_params {
+    [#("q", query)] -> {
+      case string.length(query) {
+        n if min_query_length <= n && n <= max_query_length -> Ok(query)
+        _ -> Error("missing or malformed query string")
+      }
+    }
+    _ -> Error("missing or malformed query string")
+  }
+}
+
 fn search_form_view(form: Form(SearchForm)) -> element.Element(b) {
-  html.form([attribute.method("post"), attribute.action("/search")], [
-    html.fieldset(
-      [
-        attribute.class(
-          "fieldset bg-base-200 border-base-300 rounded-box w-xs border p-4",
-        ),
-      ],
-      [
-        html.legend([attribute.class("fieldset-legend")], [
-          html.text("Search"),
-        ]),
-
-        html.div([], [
-          html.label([attribute.for("query"), attribute.class("label")], [
-            html.text("Query"),
-          ]),
-          html.input([
-            attribute.type_("text"),
-            attribute.name("query"),
-            attribute.id("query"),
-            attribute.required(True),
-            attribute.minlength(min_query_length),
-            attribute.maxlength(max_query_length),
-            attribute.value(form.field_value(form, "query")),
-            attribute.class("input validator font-mono"),
-          ]),
-
-          // HTML5 validation errors
-          html.span([attribute.class("validator-hint font-bold")], [
-            html.text("⚠️ Must be between 3 and 64 characters"),
-          ]),
-
-          // Any backend form errors
-          html.div(
-            [],
-            list.map(form.field_error_messages(form, "query"), fn(msg) {
-              html.p([attribute.class("text-error")], [
-                element.text(msg),
-              ])
-            }),
+  html.form(
+    [
+      attribute.method("post"),
+      attribute.action("/search"),
+      // A bit of JS to disable the submit button on form submit.
+      attribute.attribute(
+        "onsubmit",
+        "this.querySelector('button[type=submit]').disabled=true",
+      ),
+    ],
+    [
+      html.fieldset(
+        [
+          attribute.class(
+            "fieldset bg-base-200 border-base-300 rounded-box w-xs border p-4",
           ),
-        ]),
+        ],
+        [
+          html.legend([attribute.class("fieldset-legend")], [
+            html.text("Search"),
+          ]),
 
-        html.button(
-          [attribute.type_("submit"), attribute.class("btn btn-primary mt-4")],
-          [html.text("Submit")],
-        ),
-        html.button(
-          [attribute.type_("reset"), attribute.class("btn btn-ghost mt-1")],
-          [html.text("Cancel")],
-        ),
-      ],
-    ),
-  ])
+          html.div([], [
+            html.label([attribute.for("query"), attribute.class("label")], [
+              html.text("Query"),
+            ]),
+            html.input([
+              attribute.type_("text"),
+              attribute.name("query"),
+              attribute.id("query"),
+              attribute.required(True),
+              attribute.minlength(min_query_length),
+              attribute.maxlength(max_query_length),
+              attribute.value(form.field_value(form, "query")),
+              attribute.class("input validator font-mono"),
+            ]),
+
+            // HTML5 validation errors
+            html.span([attribute.class("validator-hint font-bold")], [
+              html.text("⚠️ Must be between 3 and 64 characters"),
+            ]),
+
+            // Any backend form errors
+            html.div(
+              [],
+              list.map(form.field_error_messages(form, "query"), fn(msg) {
+                html.p([attribute.class("text-error")], [
+                  element.text(msg),
+                ])
+              }),
+            ),
+          ]),
+
+          html.button(
+            [attribute.type_("submit"), attribute.class("btn btn-primary mt-4")],
+            [html.text("Submit")],
+          ),
+          html.button(
+            [attribute.type_("reset"), attribute.class("btn btn-ghost mt-1")],
+            [html.text("Cancel")],
+          ),
+        ],
+      ),
+    ],
+  )
 }
 
 fn layout(
@@ -280,8 +326,8 @@ fn layout(
   title title: option.Option(String),
 ) -> element.Element(a) {
   let title = case title {
-    option.None -> "Hello, World!"
-    Some(title) -> title <> " | Hello, World!"
+    option.None -> "Gleam Code Search"
+    Some(title) -> title <> " | Gleam Code Search"
   }
 
   html.html([attribute.attribute("lang", "en")], [
