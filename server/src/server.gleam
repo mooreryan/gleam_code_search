@@ -17,6 +17,7 @@ import lustre/attribute
 import lustre/element
 import lustre/element/html
 import mist
+import simplifile
 import wisp.{type Request, type Response}
 import wisp/wisp_mist
 
@@ -48,6 +49,13 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
 
   let assert Ok(index_path) = envoy.get("GLEAM_CODESEARCH_INDEX")
     as "env var GLEAM_CODESEARCH_INDEX was not set"
+  let assert Ok(True) = simplifile.is_file(index_path)
+
+  // This is the directory where the files that went into the index live.
+  let assert Ok(index_data_directory) =
+    envoy.get("GLEAM_CODESEARCH_INDEX_DATA_DIRECTORY")
+    as "env var GLEAM_CODESEARCH_INDEX_DATA_DIRECTORY was not set"
+  let assert Ok(True) = simplifile.is_directory(index_data_directory)
 
   wisp.log_debug("Reading index")
   let assert Ok(index) = index.read_binary(index_path)
@@ -70,7 +78,7 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
 
   let assert Ok(supervisor) =
     static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(searcher(searcher_name))
+    |> static_supervisor.add(searcher(searcher_name, index_data_directory))
     |> static_supervisor.add(server_child_specification)
     |> static_supervisor.start
 
@@ -90,6 +98,7 @@ type SearcherMessage {
 
 fn searcher(
   pool_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
+  index_data_directory: String,
 ) -> supervision.ChildSpecification(static_supervisor.Supervisor) {
   let lifeguard_child_spec =
     lifeguard.new(pool_name, Nil)
@@ -100,6 +109,7 @@ fn searcher(
             index.search_query(
               query,
               get_index(),
+              index_data_directory,
               wisp.log_debug,
               wisp.log_notice,
             )
@@ -295,7 +305,7 @@ fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
     [attribute.class("bg-base-200 border-base-300 rounded-box border p-4")],
     [
       html.h3([attribute.class("font-mono text-sm text-primary font-bold")], [
-        html.text(clean_file_name(search_result.file)),
+        html.text(search_result.file),
       ]),
       html.p([attribute.class("text-xs text-base-content/70 mt-2")], [
         html.text("Line: "),
@@ -311,14 +321,6 @@ fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
       ),
     ],
   )
-}
-
-// TODO: this will need to change based on the actual production index location
-fn clean_file_name(file_name: String) -> String {
-  case string.split(file_name, "/tb/") {
-    [_dir, good_part] -> good_part
-    _ -> "unknown"
-  }
 }
 
 fn pagination_nav_view(

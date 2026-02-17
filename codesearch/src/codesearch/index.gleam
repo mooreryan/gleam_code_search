@@ -223,6 +223,7 @@ pub type SearchResult {
 pub fn search_query(
   query: String,
   index: Index,
+  index_data_directory: String,
   log_debug: fn(String) -> Nil,
   log_notice: fn(String) -> Nil,
 ) -> Result(List(SearchResult), List(String)) {
@@ -254,27 +255,21 @@ pub fn search_query(
         |> list.fold([], fn(acc, file_index) {
           let result = {
             use file <- result.try(pull_file(index.files, file_index))
+            let file_with_directory = index_data_directory <> "/" <> file
             use file_info <- result.try(
-              simplifile.file_info(file)
+              simplifile.file_info(file_with_directory)
               |> result.map_error(simplifile.describe_error),
             )
 
             case file_info.size > max_file_size_bytes {
               True -> {
-                // log_notice(
-                //   "file too big ("
-                //   <> int.to_string(file_info.size)
-                //   <> " bytes): "
-                //   <> file,
-                // )
-
                 // If file is too big, don't treat it as an error, simply return
                 // the acc and move on to the next one.
                 Ok(acc)
               }
               False -> {
                 use file_data <- result.try(
-                  simplifile.read(file)
+                  simplifile.read(file_with_directory)
                   |> result.map_error(simplifile.describe_error),
                 )
                 let lines = string.split(file_data, on: "\n")

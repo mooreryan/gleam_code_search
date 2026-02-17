@@ -49,4 +49,5 @@ gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
 lifeguard = { version = ">= 4.0.0 and < 5.0.0" }
 lustre = { version = ">= 5.5.2 and < 6.0.0" }
 mist = { version = ">= 5.0.4 and < 6.0.0" }
+simplifile = { version = ">= 2.3.2 and < 3.0.0" }
 wisp = { version = ">= 2.2.0 and < 3.0.0" }

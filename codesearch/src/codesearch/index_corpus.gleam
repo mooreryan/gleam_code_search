@@ -34,7 +34,10 @@ pub fn main() {
     "Total files to index: " <> int.to_string(list.length(corpus_files)),
   )
 
-  use index <- result.try(process_corpus_files(corpus_files))
+  use index <- result.try(process_corpus_files(
+    corpus_files,
+    config.corpus_directory,
+  ))
 
   log.info("Writing index json")
   use Nil <- result.try(
@@ -115,7 +118,10 @@ fn log_file_errors(errors: List(#(String, simplifile.FileError))) -> Nil {
   }
 }
 
-fn process_corpus_files(corpus_files: List(String)) -> Result(Index, String) {
+fn process_corpus_files(
+  corpus_files: List(String),
+  corpus_directory: String,
+) -> Result(Index, String) {
   log.info("Filtering files")
   let corpus_files =
     corpus_files
@@ -124,7 +130,20 @@ fn process_corpus_files(corpus_files: List(String)) -> Result(Index, String) {
 
   log.debug("Indexing files")
 
-  let index = Index(files: iv.from_list(corpus_files), trigrams: dict.new())
+  let files_without_dir =
+    list.map(corpus_files, fn(file) {
+      let assert Ok(#(_, filename)) =
+        // If this fails its a bug you need to fix
+        string.split_once(file, on: corpus_directory)
+        as { "failed to splt " <> file }
+
+      filename
+    })
+
+  // TODO: right here, it would be better to use a relative path, and then set
+  // the proper path as an environment variable in the server?
+  let index =
+    Index(files: iv.from_list(files_without_dir), trigrams: dict.new())
 
   let index = list.index_fold(over: corpus_files, from: index, with: index_file)
 
