@@ -19,7 +19,10 @@ server_dev:
         --watch test \
         --watch assets \
         --watch gleam.toml \
-        -- 'sleep 2 && npx @tailwindcss/cli -i ./assets/css/app.css -o ./priv/static/css/app.css && GLEAM_CODESEARCH_INDEX="../_index/gleam_packages_index" gleam run'
+        -- 'sleep 2 && npx @tailwindcss/cli -i ./assets/css/app.css -o ./priv/static/css/app.css && GLEAM_CODESEARCH_INDEX="../_index/stdlib_index" gleam run'
 
 server:
     cd server && npx @tailwindcss/cli -i ./assets/css/app.css -o ./priv/static/css/app.css --minify && GLEAM_CODESEARCH_INDEX="../_index/gleam_packages_index" gleam run
+
+server_small:
+    cd server && npx @tailwindcss/cli -i ./assets/css/app.css -o ./priv/static/css/app.css --minify && GLEAM_CODESEARCH_INDEX="../_index/stdlib_index" gleam run

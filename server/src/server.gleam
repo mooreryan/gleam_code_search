@@ -6,6 +6,7 @@ import gleam/http.{Get, Post}
 import gleam/int
 import gleam/list
 import gleam/option.{Some}
+import gleam/result
 import gleam/string
 import gleam/uri
 import lustre/attribute
@@ -18,6 +19,8 @@ import wisp/wisp_mist
 const min_query_length: Int = 3
 
 const max_query_length: Int = 64
+
+const page_size: Int = 25
 
 pub fn main() -> Nil {
   wisp.configure_logger()
@@ -102,7 +105,10 @@ fn handle_search_post_request(request: Request) -> Response {
 
   case form_result {
     Ok(search_form) ->
-      wisp.redirect("/search?q=" <> uri.percent_encode(search_form.query))
+      // We always start on page 1 from a post
+      wisp.redirect(
+        "/search?page=1&q=" <> uri.percent_encode(search_form.query),
+      )
 
     Error(form) -> {
       // Rerender the home page, the form has errors now.
@@ -118,14 +124,32 @@ fn handle_search_get_request(request: Request) -> Response {
   let query_params = wisp.get_query(request)
 
   case parse_search_query_params(query_params) {
-    Ok(query) -> {
+    Ok(SearchQueryParams(query:, page:)) -> {
       wisp.log_debug("searching query: " <> query)
       let search_result = index.search_query(query, get_index())
 
       case search_result {
         Ok(search_results) -> {
+          // Paginate
+          let total_results = list.length(search_results)
+
+          // TODO: handle pages that are out of range
+          let search_results =
+            search_results
+            |> list.drop({ page - 1 } * page_size)
+            |> list.take(page_size)
+
+          // TODO: probably want a few tests for the pagination stuff!
+          let total_pages = { total_results + page_size - 1 } / page_size
+
           render_page(
-            search_results_page(search_results),
+            search_results_page(
+              current_page: page,
+              total_pages:,
+              total_results:,
+              search_results:,
+              query:,
+            ),
             title: Some("Search Results"),
           )
           |> wisp.html_response(200)
@@ -143,20 +167,28 @@ fn handle_search_get_request(request: Request) -> Response {
 }
 
 fn search_results_page(
-  search_results: List(index.SearchResult),
+  current_page current_page: Int,
+  total_pages total_pages: Int,
+  // This is the REAL total, not the amount returned in the current page
+  total_results total_results: Int,
+  // This will generally be shorter than total results, as they are paginated
+  search_results search_results: List(index.SearchResult),
+  query query: String,
 ) -> element.Element(a) {
-  html.div([attribute.class("space-y-6")], [
+  html.div([attribute.class("space-y-6 pb-4")], [
     html.h2([attribute.class("text-2xl font-bold")], [
       html.text("Search Results"),
     ]),
     html.p([], [
       html.text("Total results: "),
-      html.text(int.to_string(list.length(search_results))),
+      html.text(int.to_string(total_results)),
     ]),
+    pagination_nav_view(current_page:, total_pages:, query:),
     html.div(
       [attribute.class("space-y-4")],
       list.map(search_results, search_result_view),
     ),
+    pagination_nav_view(current_page:, total_pages:, query:),
   ])
 }
 
@@ -188,6 +220,89 @@ fn clean_file_name(file_name: String) -> String {
   case string.split(file_name, "/tb/") {
     [_dir, good_part] -> good_part
     _ -> "unknown"
+  }
+}
+
+fn pagination_nav_view(
+  current_page current_page: Int,
+  total_pages total_pages: Int,
+  query query: String,
+) {
+  let encoded_query = uri.percent_encode(query)
+
+  // TODO: in the actual search, handle the bad pages
+
+  let page_link = fn(page: Int, label: String, enabled: Bool) {
+    let href = "/search?page=" <> int.to_string(page) <> "&q=" <> encoded_query
+
+    let btn_disabled = attribute.classes([#("btn-disabled", !enabled)])
+
+    html.a([attribute.class("btn btn-sm"), btn_disabled, attribute.href(href)], [
+      html.text(label),
+    ])
+  }
+
+  let first = page_link(1, "<<", current_page > 1)
+  let prev = page_link(current_page - 1, "<", current_page > 1)
+  let next = page_link(current_page + 1, ">", current_page < total_pages)
+  let last = page_link(total_pages, ">>", current_page < total_pages)
+
+  let current =
+    html.form(
+      [attribute.method("GET"), attribute.class("flex items-center gap-2")],
+      [
+        html.text("Page"),
+        html.input([
+          attribute.type_("number"),
+          attribute.name("page"),
+          attribute.id("page"),
+          attribute.value(format_with_commas(current_page)),
+          attribute.class("input input-sm input-bordered w-20 text-center"),
+        ]),
+        html.input([
+          attribute.type_("hidden"),
+          attribute.name("q"),
+          attribute.value(query),
+        ]),
+
+        html.text("of "),
+        // TODO: commas function
+        html.text(format_with_commas(total_pages)),
+      ],
+    )
+
+  html.div([attribute.class("flex items-center gap-4")], [
+    first,
+    prev,
+    current,
+    next,
+    last,
+  ])
+}
+
+@internal
+pub fn format_with_commas(n: Int) -> String {
+  let str = int.to_string(n)
+
+  case n < 0 {
+    True -> "-" <> format_digits(string.drop_start(str, 1))
+    False -> format_digits(str)
+  }
+}
+
+fn format_digits(str: String) -> String {
+  str
+  |> string.to_graphemes
+  |> list.reverse
+  |> group_by_threes
+  |> list.reverse
+  |> string.join("")
+}
+
+fn group_by_threes(digits: List(String)) -> List(String) {
+  case digits {
+    [] | [_] | [_, _] | [_, _, _] -> digits
+    [a, b, c, ..rest] -> [a, b, c, ",", ..group_by_threes(rest)]
   }
 }
 
@@ -236,20 +351,33 @@ fn search_form() -> Form(SearchForm) {
   })
 }
 
+type SearchQueryParams {
+  SearchQueryParams(query: String, page: Int)
+}
+
 /// This one is for parsing the search query when it is encoded in a query
 /// string.
 ///
 fn parse_search_query_params(
   query_params: List(#(String, String)),
-) -> Result(String, String) {
-  case query_params {
-    [#("q", query)] -> {
+) -> Result(SearchQueryParams, String) {
+  let page = case list.key_find(query_params, "page") {
+    Ok(page) -> int.parse(page) |> result.unwrap(1)
+    Error(Nil) -> 1
+  }
+
+  let query = list.key_find(query_params, "q")
+
+  case query {
+    Ok(query) -> {
       case string.length(query) {
-        n if min_query_length <= n && n <= max_query_length -> Ok(query)
+        n if min_query_length <= n && n <= max_query_length ->
+          Ok(SearchQueryParams(query:, page:))
         _ -> Error("missing or malformed query string")
       }
     }
-    _ -> Error("missing or malformed query string")
+
+    Error(Nil) -> Error("missing or malformed query string")
   }
 }
 
@@ -342,6 +470,15 @@ fn layout(
         attribute.rel("stylesheet"),
         attribute.href("/static/css/app.css"),
       ]),
+      html.script(
+        [],
+        "
+      window.addEventListener('pageshow', function() {
+        var btn = document.querySelector('button[type=submit]');
+        if (btn) btn.disabled = false;
+      });
+",
+      ),
     ]),
     html.body([], [
       html.main([attribute.class("container mx-auto pt-4")], [
