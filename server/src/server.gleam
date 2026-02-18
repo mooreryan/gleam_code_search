@@ -73,6 +73,7 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
   let server_child_specification =
     wisp_mist.handler(handle_request(_, context), secret_key_base)
     |> mist.new
+    |> mist.bind("0.0.0.0")
     |> mist.port(4444)
     |> mist.supervised
 
