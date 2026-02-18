@@ -50,16 +50,18 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
   let assert Ok(index_path) = envoy.get("GLEAM_CODESEARCH_INDEX")
     as "env var GLEAM_CODESEARCH_INDEX was not set"
   let assert Ok(True) = simplifile.is_file(index_path)
+    as { "index file " <> index_path <> " does not exist" }
 
   // This is the directory where the files that went into the index live.
   let assert Ok(index_data_directory) =
     envoy.get("GLEAM_CODESEARCH_INDEX_DATA_DIRECTORY")
     as "env var GLEAM_CODESEARCH_INDEX_DATA_DIRECTORY was not set"
   let assert Ok(True) = simplifile.is_directory(index_data_directory)
+    as { "index data directory " <> index_data_directory <> " does not exist" }
 
   wisp.log_debug("Reading index")
   let assert Ok(index) = index.read_binary(index_path)
-    as "failed to read and parse index"
+    as { "failed to read and parse index: " <> index_path }
 
   wisp.log_debug("Putting index")
   put_index(index)
@@ -73,6 +75,7 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
   let server_child_specification =
     wisp_mist.handler(handle_request(_, context), secret_key_base)
     |> mist.new
+    |> mist.bind("0.0.0.0")
     |> mist.port(4444)
     |> mist.supervised
 
@@ -81,6 +84,7 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
     |> static_supervisor.add(searcher(searcher_name, index_data_directory))
     |> static_supervisor.add(server_child_specification)
     |> static_supervisor.start
+    as "failed to start supervisor"
 
   Ok(supervisor.pid)
 }

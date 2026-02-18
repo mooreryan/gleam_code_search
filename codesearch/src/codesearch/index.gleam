@@ -28,7 +28,9 @@ pub type Index {
 pub fn read_binary(index_path) {
   use bits <- result.try(
     simplifile.read_bits(index_path)
-    |> result.map_error(simplifile.describe_error),
+    |> result.map_error(fn(error) {
+      simplifile.describe_error(error) <> ", when processing " <> index_path
+    }),
   )
   deserialize(bits)
 }
@@ -258,7 +260,11 @@ pub fn search_query(
             let file_with_directory = index_data_directory <> "/" <> file
             use file_info <- result.try(
               simplifile.file_info(file_with_directory)
-              |> result.map_error(simplifile.describe_error),
+              |> result.map_error(fn(error) {
+                simplifile.describe_error(error)
+                <> ", when processing "
+                <> file_with_directory
+              }),
             )
 
             case file_info.size > max_file_size_bytes {
@@ -270,7 +276,11 @@ pub fn search_query(
               False -> {
                 use file_data <- result.try(
                   simplifile.read(file_with_directory)
-                  |> result.map_error(simplifile.describe_error),
+                  |> result.map_error(fn(error) {
+                    simplifile.describe_error(error)
+                    <> ", when processing "
+                    <> file_with_directory
+                  }),
                 )
                 let lines = string.split(file_data, on: "\n")
                 let search_results = get_matches(file, lines, query)
