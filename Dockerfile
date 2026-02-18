@@ -1,5 +1,20 @@
 ARG ERLANG_VERSION=28.1
 ARG GLEAM_VERSION=v1.14.0
+ARG NODE_VERSION=25
+
+# Tailwind stage
+FROM node:${NODE_VERSION}-alpine AS tailwind
+
+COPY server/package.json server/package-lock.json* /app/server/
+RUN npm ci
+
+COPY server/assets /app/server/assets
+
+RUN mkdir -p /app/server/priv/static/css/
+RUN npx @tailwindcss/cli \
+    -i /app/server/assets/css/app.css \
+    -o /app/server/priv/static/css/app.css
+
 
 # Gleam stage
 FROM ghcr.io/gleam-lang/gleam:${GLEAM_VERSION}-scratch AS gleam
@@ -8,6 +23,10 @@ FROM ghcr.io/gleam-lang/gleam:${GLEAM_VERSION}-scratch AS gleam
 FROM erlang:${ERLANG_VERSION}-alpine AS build
 COPY --from=gleam /bin/gleam /bin/gleam
 COPY . /app/
+
+COPY --from=tailwind /app/server/priv/static/css/app.css \
+    /app/server/priv/static/css/app.css
+
 RUN cd /app/server && gleam export erlang-shipment
 
 # Final stage
