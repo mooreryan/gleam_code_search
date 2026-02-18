@@ -380,8 +380,6 @@ fn finalize(pending: PendingSearchResult) -> SearchResult {
   )
 }
 
-// TODO: sometimes the reading of the very big file is still slow.
-
 // This is kinda tricky, but basically, we need to go over the lines just once,
 // but still keep the context. Converting to an iv.Array and getting context
 // that way is too slow for the larger files.
