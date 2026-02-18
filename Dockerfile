@@ -5,10 +5,12 @@ ARG NODE_VERSION=25
 # Tailwind stage
 FROM node:${NODE_VERSION}-alpine AS tailwind
 
-COPY server/package.json server/package-lock.json /app/server/
-RUN npm --prefix /app/server ci
+WORKDIR /app/server
 
-COPY server/assets /app/server/assets
+COPY server/package.json server/package-lock.json ./
+RUN npm ci
+
+COPY server/assets ./assets
 
 RUN mkdir -p /app/server/priv/static/css/
 RUN npx @tailwindcss/cli \
