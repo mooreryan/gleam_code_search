@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # This script is run periodically by the Podman container engine to check if
 # the application is healthy. If the application instance is determined to be
