@@ -31,6 +31,9 @@
 
     /* sort of dark gray */
     --syntax-foreground: hsl(230, 8%, 24%);
+
+    --color-primary: #ffaff3;
+    --color-primary-content: #292d3e;
 }
 
 /* Adapted from Atom One Dark (prefers dark) */
