@@ -1,2 +1,99 @@
 @import "tailwindcss";
 @plugin "daisyui";
+
+/* Adapted from Atom One Light (Default palette) */
+:root {
+    --gray: #a0a1a7;
+
+    /* hue-2, blue */
+    --blue: hsl(221, 87%, 60%);
+
+    /* hue-3, purple */
+    --purple: hsl(301, 63%, 40%);
+
+    /* hue-6-2, orange 2 */
+    --amber: hsl(41, 99%, 38%);
+
+    /* hue-6, orange 1 */
+    --brown: hsl(41, 99%, 30%);
+
+    /* hue-1, cyan */
+    --teal: hsl(198, 99%, 37%);
+
+    /* hue-4, green */
+    --green: hsl(119, 34%, 47%);
+
+    /* hue-5-2, red 2 */
+    --red: hsl(344, 84%, 43%);
+
+    /* hue-5, red 1 */
+    --red-2: hsl(5, 74%, 59%);
+
+    /* sort of dark gray */
+    --syntax-foreground: hsl(230, 8%, 24%);
+}
+
+/* Adapted from Atom One Dark (prefers dark) */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --gray: #5c6370;
+
+        /* hue-2, blue */
+        --blue: hsl(207, 82%, 66%);
+
+        /* hue-3, purple */
+        --purple: hsl(286, 60%, 67%);
+
+        /* hue-6-2, orange 2 */
+        --amber: #e5c07b;
+
+        /* hue-6, orange 1 */
+        --brown: hsl(29, 54%, 61%);
+
+        /* hue-1, cyan */
+        --teal: hsl(187, 47%, 55%);
+
+        /* hue-4, green */
+        --green: hsl(95, 38%, 62%);
+
+        /* hue-5, red 1 */
+        --red: hsl(355, 65%, 65%);
+
+        /* hue-5-2, red2 */
+        --red-2: hsl(5, 48%, 51%);
+
+        /* sort of light gray */
+        --syntax-foreground: hsl(220, 14%, 71%);
+    }
+}
+
+/* Highlight rules */
+
+pre code .hl-comment {
+    color: var(--gray);
+    font-style: italic;
+}
+pre code .hl-function {
+    color: var(--blue);
+}
+pre code .hl-keyword {
+    color: var(--purple);
+}
+pre code .hl-module {
+    color: var(--amber);
+}
+pre code .hl-number {
+    color: var(--brown);
+}
+pre code .hl-operator {
+    color: var(--teal);
+}
+pre code .hl-string {
+    color: var(--green);
+}
+pre code .hl-variant {
+    color: var(--red);
+}
+pre code {
+    color: var(--syntax-foreground);
+}

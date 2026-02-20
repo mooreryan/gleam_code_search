@@ -1,0 +1,2 @@
+- Atom One Light: https://raw.githubusercontent.com/atom/one-light-syntax/aaefc249c22a0ce8fb9c45382120ca1578267f28/styles/colors.less
+- Atom One Dark: https://raw.githubusercontent.com/atom/one-dark-syntax/9c96f4454362267ac45322063e193ccf9d2debb1/styles/colors.less

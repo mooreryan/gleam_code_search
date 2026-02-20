@@ -1,4 +1,5 @@
 import codesearch/index.{type Index}
+import contour
 import envoy
 import formal/form.{type Form}
 import gleam/erlang/process
@@ -338,7 +339,7 @@ fn search_results_page(
         html.div([], [
           pagination_nav_view(current_page:, total_pages:, query:),
           html.div(
-            [attribute.class("space-y-4")],
+            [attribute.class("space-y-6")],
             list.map(search_results, search_result_view),
           ),
           pagination_nav_view(current_page:, total_pages:, query:),
@@ -348,8 +349,20 @@ fn search_results_page(
 }
 
 fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
+  let highlighted_code = contour.to_html(search_result.line_with_context)
+
+  let code =
+    element.unsafe_raw_html(
+      "",
+      "code",
+      [attribute.class("text-sm")],
+      highlighted_code,
+    )
+
   html.div(
-    [attribute.class("bg-base-200 border-base-300 rounded-box border p-4")],
+    [
+      attribute.class("bg-base-300 rounded-box shadow-md p-4"),
+    ],
     [
       html.h3([attribute.class("font-mono text-sm text-primary font-bold")], [
         html.text(search_result.file),
@@ -359,12 +372,8 @@ fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
         html.text(int.to_string(search_result.line_index + 1)),
       ]),
       html.pre(
-        [attribute.class("bg-base-300 rounded p-3 mt-3 overflow-x-auto")],
-        [
-          html.code([attribute.class("text-sm")], [
-            html.text(search_result.line_with_context),
-          ]),
-        ],
+        [attribute.class("bg-base-100 rounded p-3 mt-3 overflow-x-auto")],
+        [code],
       ),
     ],
   )
