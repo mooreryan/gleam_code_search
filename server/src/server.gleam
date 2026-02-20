@@ -349,7 +349,11 @@ fn search_results_page(
 }
 
 fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
-  let highlighted_code = contour.to_html(search_result.line_with_context)
+  // This only highlights gleam code
+  let highlighted_code = case string.ends_with(search_result.file, ".gleam") {
+    True -> contour.to_html(search_result.line_with_context)
+    False -> search_result.line_with_context
+  }
 
   let code =
     element.unsafe_raw_html(
