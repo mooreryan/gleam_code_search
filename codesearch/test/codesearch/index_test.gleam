@@ -22,8 +22,7 @@ pub fn index_serializing_roundtrip__test() {
       ]),
     )
 
-  let result =
-    index |> echo |> index.serialize |> echo |> index.deserialize |> echo
+  let result = index |> index.serialize |> index.deserialize
 
   assert result == Ok(index)
 }

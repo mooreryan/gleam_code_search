@@ -60,6 +60,10 @@ pub fn fold_trigrams__division_sign_in_middle__test() {
   assert trigram_list_from_string("a÷b") == Ok([])
 }
 
+pub fn fold_trigrams__division_sign_in_middle_2__test() {
+  assert trigram_list_from_string("abc") == Ok([])
+}
+
 pub fn fold_trigrams__ascii_separated_by_division__test() {
   assert trigram_list_from_string("abc÷defg") == Ok(["abc", "def", "efg"])
 }
@@ -74,4 +78,8 @@ pub fn fold_trigrams__ascii_before_non_ascii__test() {
 
 pub fn fold_trigrams__non_ascii_before_ascii__test() {
   assert trigram_list_from_string("🍕abcd") == Ok(["abc", "bcd"])
+}
+
+pub fn mork__test() {
+  assert trigram_list_from_string("mörk") == Ok([])
 }

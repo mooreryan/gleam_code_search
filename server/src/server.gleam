@@ -95,7 +95,9 @@ pub fn stop(_: _) -> Nil {
 
 type SearcherMessage {
   Search(
-    reply_to: process.Subject(Result(List(index.SearchResult), List(String))),
+    reply_to: process.Subject(
+      Result(List(index.SearchResult), List(index.Error)),
+    ),
     query: String,
   )
 }
@@ -115,7 +117,6 @@ fn searcher(
               get_index(),
               index_data_directory,
               wisp.log_debug,
-              wisp.log_notice,
             )
 
           process.send(reply_to, search_result)
@@ -133,7 +134,7 @@ fn search(
   searcher_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
   query: String,
 ) -> Result(
-  Result(List(index.SearchResult), List(String)),
+  Result(List(index.SearchResult), List(index.Error)),
   lifeguard.ApplyError,
 ) {
   lifeguard.call(
@@ -254,8 +255,43 @@ fn handle_search_get_request(request: Request, context: Context) -> Response {
             }
 
             Error(errors) -> {
-              wisp.log_error(string.join(errors, ";"))
-              wisp.internal_server_error()
+              let msg_for_log =
+                errors |> list.map(string.inspect) |> string.join(with: ";")
+              wisp.log_error(msg_for_log)
+
+              let #(search_failed_errors, server_errors) =
+                list.partition(errors, fn(error) {
+                  case error {
+                    index.SearchFailed(_) -> True
+                    index.ServerError(_) -> False
+                  }
+                })
+
+              case search_failed_errors, server_errors {
+                // This should be impossible. Don't even bother sending a real
+                // page to the user.
+                [], [] -> {
+                  wisp.internal_server_error()
+                }
+                _search_failed_errors, [] -> {
+                  render_page(
+                    search_results_page(
+                      current_page: page,
+                      total_pages: 0,
+                      total_results: 0,
+                      search_results: [],
+                      query:,
+                    ),
+                    title: Some("Search Results"),
+                  )
+                  |> wisp.html_response(200)
+                }
+                [], _server_errors | _, _server_errors -> {
+                  internal_server_error_page()
+                  |> render_page(title: Some("Internal Server Error"))
+                  |> wisp.html_response(500)
+                }
+              }
             }
           }
         }
@@ -290,7 +326,14 @@ fn search_results_page(
     ]),
 
     case total_results > 0 {
-      False -> html.div([], [])
+      False ->
+        html.div([], [
+          html.p([attribute.class("text-xs")], [
+            html.text(
+              "Note: queries must contain at least 3 contiguous ASCII characters",
+            ),
+          ]),
+        ])
       True ->
         html.div([], [
           pagination_nav_view(current_page:, total_pages:, query:),
@@ -566,6 +609,30 @@ fn nav_view() -> element.Element(a) {
   html.nav([attribute.class("pb-4")], [
     html.a([attribute.href("/"), attribute.class("btn btn-ghost")], [
       html.text("Home"),
+    ]),
+  ])
+}
+
+fn internal_server_error_page() -> element.Element(_) {
+  html.div([], [
+    html.h1([attribute.class("text-2xl font-bold")], [
+      html.text("Gleam Code Search"),
+    ]),
+    html.h2([attribute.class("text-xl text-error mt-4")], [
+      html.text("500 — Internal Server Error"),
+    ]),
+    html.p([attribute.class("mt-2")], [
+      html.text("Oh no, something went wrong on our end! Please "),
+      html.a(
+        [
+          attribute.class("link"),
+          attribute.href(
+            "https://github.com/mooreryan/gleam_code_search/issues",
+          ),
+        ],
+        [html.text("open an issue on GitHub")],
+      ),
+      html.text(" if this keeps happening."),
     ]),
   ])
 }

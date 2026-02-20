@@ -14,6 +14,33 @@ import simplifile
 ///
 const max_file_size_bytes: Int = 500_000
 
+// These two variants are separated out because we need to show user different
+// messages based on the category.
+pub type Error {
+  SearchFailed(SearchFailed)
+  ServerError(ServerError)
+}
+
+pub type SearchFailed {
+  /// The query itself did not have at least one valid trigram
+  ///
+  NoTrigramsInQuery(query: String)
+
+  /// If there are no putative files in the trigram pre-search
+  ///
+  NoPutativeFiles(query: String)
+}
+
+pub type ServerError {
+  /// If there are any errors processing files (simplifile errors)
+  ///
+  FileError(error: simplifile.FileError, while_processing: String)
+
+  // If there is no entry at the given array index
+  //
+  MissingFileInIndexError(at_index: Int)
+}
+
 /// The type representing an index for a corpus
 ///
 pub type Index {
@@ -227,20 +254,20 @@ pub fn search_query(
   index: Index,
   index_data_directory: String,
   log_debug: fn(String) -> Nil,
-  log_notice: fn(String) -> Nil,
-) -> Result(List(SearchResult), List(String)) {
+) -> Result(List(SearchResult), List(Error)) {
   use query_trigrams <- result.try(
     query
     |> bit_array.from_string
     |> trigrams.unique_trigrams
-    |> result.replace_error(["no unique trigrams"]),
+    |> result.replace_error([SearchFailed(NoTrigramsInQuery(query))]),
   )
 
-  let file_indices = get_putative_file_indices(index.trigrams, query_trigrams)
+  let file_indices =
+    get_putative_file_indices(index.trigrams, query_trigrams, query)
 
   case file_indices {
     // No search results
-    Error(Nil) -> Error(["no search results"])
+    Error(reason) -> Error([reason])
 
     // We had some search results
     Ok(file_indices) -> {
@@ -261,9 +288,10 @@ pub fn search_query(
             use file_info <- result.try(
               simplifile.file_info(file_with_directory)
               |> result.map_error(fn(error) {
-                simplifile.describe_error(error)
-                <> ", when processing "
-                <> file_with_directory
+                ServerError(FileError(
+                  error:,
+                  while_processing: file_with_directory,
+                ))
               }),
             )
 
@@ -277,9 +305,10 @@ pub fn search_query(
                 use file_data <- result.try(
                   simplifile.read(file_with_directory)
                   |> result.map_error(fn(error) {
-                    simplifile.describe_error(error)
-                    <> ", when processing "
-                    <> file_with_directory
+                    ServerError(FileError(
+                      error:,
+                      while_processing: file_with_directory,
+                    ))
                   }),
                 )
                 let lines = string.split(file_data, on: "\n")
@@ -310,9 +339,14 @@ pub fn search_query(
   }
 }
 
-fn get_putative_file_indices(index_trigrams, query_trigrams) {
+/// The query is passed in for error reporting
+fn get_putative_file_indices(
+  index_trigrams: Dict(String, Set(Int)),
+  query_trigrams: Set(String),
+  query: String,
+) -> Result(Set(Int), Error) {
   case set.to_list(query_trigrams) {
-    [] -> panic as "should have seen at least one trigram"
+    [] -> Error(SearchFailed(NoTrigramsInQuery(query)))
     [trigram, ..rest] -> {
       list.try_fold(
         rest,
@@ -322,7 +356,7 @@ fn get_putative_file_indices(index_trigrams, query_trigrams) {
             set.intersection(acc, get_file_indices(index_trigrams, trigram))
 
           case set.is_empty(acc) {
-            True -> Error(Nil)
+            True -> Error(SearchFailed(NoPutativeFiles(query)))
             False -> Ok(acc)
           }
         },
@@ -338,13 +372,9 @@ fn get_file_indices(trigrams, trigram) {
   }
 }
 
-fn pull_file(files: Array(String), at_index: Int) -> Result(String, String) {
+fn pull_file(files: Array(String), at_index: Int) -> Result(String, Error) {
   iv.get(files, at_index)
-  |> result.replace_error(
-    "failed to get file at index "
-    <> int.to_string(at_index)
-    <> " which should be impossible",
-  )
+  |> result.replace_error(ServerError(MissingFileInIndexError(at_index:)))
 }
 
 type PendingSearchResult {
