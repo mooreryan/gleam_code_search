@@ -72,6 +72,15 @@
 
 /* Highlight rules */
 
+pre code {
+    /* Preserve whitespace and never wrap */
+    white-space: pre;
+}
+
+pre code.hl-line-numbers {
+    color: var(--gray);
+}
+
 pre code .hl-comment {
     color: var(--gray);
     font-style: italic;

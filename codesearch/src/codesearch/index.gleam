@@ -14,6 +14,10 @@ import simplifile
 ///
 const max_file_size_bytes: Int = 500_000
 
+const prefix_line_count = 3
+
+const suffix_line_count = 8
+
 // These two variants are separated out because we need to show user different
 // messages based on the category.
 pub type Error {
@@ -245,8 +249,33 @@ pub fn serialize(index: Index) -> BitArray {
 
 // SEARCHING
 
+/// A line from some source file
+pub type Line {
+  Line(
+    /// Zero-based index in the file whence the line originated
+    index: Int,
+    /// The line itself
+    line: String,
+  )
+}
+
 pub type SearchResult {
-  SearchResult(file: String, line_index: Int, line_with_context: String)
+  SearchResult(
+    file: String,
+    matching_line: Line,
+    prefix_lines: List(Line),
+    suffix_lines: List(Line),
+  )
+}
+
+pub fn search_result_line_numbers(search_result: SearchResult) -> List(Int) {
+  [
+    search_result.prefix_lines,
+    [search_result.matching_line],
+    search_result.suffix_lines,
+  ]
+  |> list.flatten
+  |> list.map(fn(line) { line.index + 1 })
 }
 
 pub fn search_query(
@@ -380,17 +409,16 @@ fn pull_file(files: Array(String), at_index: Int) -> Result(String, Error) {
 type PendingSearchResult {
   PendingSearchResult(
     file: String,
-    line_index: Int,
-    line: String,
-    prefix_reversed: List(String),
-    suffix_reversed: List(String),
+    matching_line: Line,
+    prefix_reversed: List(Line),
+    suffix_reversed: List(Line),
     need: Int,
   )
 }
 
 fn push_suffix_line(
   pending: PendingSearchResult,
-  line: String,
+  line: Line,
 ) -> PendingSearchResult {
   case pending.need {
     0 -> pending
@@ -407,16 +435,11 @@ fn is_done(pending: PendingSearchResult) -> Bool {
 }
 
 fn finalize(pending: PendingSearchResult) -> SearchResult {
-  let prefix = list.reverse(pending.prefix_reversed)
-  let suffix = list.reverse(pending.suffix_reversed)
-
-  let line_with_context =
-    [prefix, [pending.line], suffix] |> list.flatten |> string.join("\n")
-
   SearchResult(
     file: pending.file,
-    line_index: pending.line_index,
-    line_with_context:,
+    matching_line: pending.matching_line,
+    prefix_lines: list.reverse(pending.prefix_reversed),
+    suffix_lines: list.reverse(pending.suffix_reversed),
   )
 }
 
@@ -428,12 +451,11 @@ fn get_matches(
   lines: List(String),
   query: String,
 ) -> List(SearchResult) {
-  let prefix_line_count = 3
-  let suffix_line_count = 8
-
   let #(completed_reversed, still_pending_reversed, _prefix_reversed) =
     list.index_fold(lines, #([], [], []), fn(acc, line, line_index) {
       let #(completed_reversed, still_pending_reversed, prefix_reversed) = acc
+
+      let line = Line(index: line_index, line:)
 
       // We need to add this line to any pending items
       let still_pending =
@@ -450,13 +472,14 @@ fn get_matches(
         })
 
       // Check if the current line matches, if yes we need a new pending match
-      let still_pending = case string.contains(does: line, contain: query) {
+      let still_pending = case
+        string.contains(does: line.line, contain: query)
+      {
         True -> {
           let new_pending =
             PendingSearchResult(
               file:,
-              line_index:,
-              line:,
+              matching_line: line,
               prefix_reversed:,
               suffix_reversed: [],
               need: suffix_line_count,

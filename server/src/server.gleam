@@ -349,19 +349,72 @@ fn search_results_page(
 }
 
 fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
-  // This only highlights gleam code
-  let highlighted_code = case string.ends_with(search_result.file, ".gleam") {
-    True -> contour.to_html(search_result.line_with_context)
-    False -> search_result.line_with_context
+  // Lines that are "empty" should still put a break in the code. Since we split
+  // on the newline, add it back in to empty lines, so that the div won't be
+  // "empty", and will show properly as a newline.
+  let newlines = fn(line) {
+    case line {
+      "" -> "\n"
+      _ -> line
+    }
   }
 
-  let code =
-    element.unsafe_raw_html(
-      "",
-      "code",
-      [attribute.class("text-sm")],
-      highlighted_code,
-    )
+  let matching_bg_color = "bg-[#ffaff326]"
+
+  // This only highlights gleam code
+  let highlighted_code = case string.ends_with(search_result.file, ".gleam") {
+    True -> {
+      let prefix =
+        search_result.prefix_lines
+        |> list.map(fn(line) {
+          let highlighted = contour.to_html(newlines(line.line))
+          element.unsafe_raw_html("", "div", [], highlighted)
+        })
+
+      let suffix =
+        search_result.suffix_lines
+        |> list.map(fn(line) {
+          let highlighted = contour.to_html(newlines(line.line))
+          element.unsafe_raw_html("", "div", [], highlighted)
+        })
+
+      let matching_line =
+        element.unsafe_raw_html(
+          "",
+          "div",
+          [attribute.class(matching_bg_color)],
+          contour.to_html(newlines(search_result.matching_line.line)),
+        )
+
+      [prefix, [matching_line], suffix] |> list.flatten
+    }
+    False -> {
+      let prefix =
+        list.map(search_result.prefix_lines, fn(line) {
+          html.div([], [html.text(newlines(line.line))])
+        })
+
+      let suffix =
+        list.map(search_result.suffix_lines, fn(line) {
+          html.div([], [html.text(newlines(line.line))])
+        })
+
+      let matching_line =
+        html.div([attribute.class(matching_bg_color)], [
+          html.text(newlines(search_result.matching_line.line)),
+        ])
+
+      [prefix, [matching_line], suffix] |> list.flatten
+    }
+  }
+
+  let code = html.code([attribute.class("text-sm")], highlighted_code)
+
+  let line_numbers =
+    index.search_result_line_numbers(search_result)
+    |> list.map(fn(line_number) {
+      html.div([], [html.text(format_with_commas(line_number))])
+    })
 
   html.div(
     [
@@ -373,12 +426,28 @@ fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
       ]),
       html.p([attribute.class("text-xs text-base-content/70 mt-2")], [
         html.text("Line: "),
-        html.text(int.to_string(search_result.line_index + 1)),
+        html.text(int.to_string(search_result.matching_line.index + 1)),
       ]),
-      html.pre(
-        [attribute.class("bg-base-100 rounded p-3 mt-3 overflow-x-auto")],
-        [code],
-      ),
+      // flex gap-3 puts the line numbers and the code side-by-side
+      html.div([attribute.class("rounded bg-base-100 p-3 mt-3 flex gap-3")], [
+        html.div(
+          [
+            // shrink-0: don't shrink
+            // select-none: don't let line numbers copy with the code
+            attribute.class("shrink-0 text-sm text-right select-none"),
+          ],
+          [
+            html.pre([], [
+              html.code([attribute.class("hl-line-numbers")], line_numbers),
+            ]),
+          ],
+        ),
+        // min-w-0: override flex's min-width: auto, which allows elment to
+        // shrink and trigger overflow
+        html.div([attribute.class("overflow-x-auto min-w-0 flex-1")], [
+          html.pre([], [code]),
+        ]),
+      ]),
     ],
   )
 }
