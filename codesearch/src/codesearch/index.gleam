@@ -1,4 +1,3 @@
-import codesearch/log
 import codesearch/trigrams
 import gleam/bit_array
 import gleam/dict.{type Dict}
@@ -8,6 +7,7 @@ import gleam/result
 import gleam/set.{type Set}
 import gleam/string
 import iv.{type Array}
+import logging
 import simplifile
 
 /// Skip any files bigger than this
@@ -196,7 +196,7 @@ fn do_deserialize_file_indices(
 pub fn serialize(index: Index) -> BitArray {
   let file_count = iv.size(index.files)
 
-  log.debug("Serializing files")
+  logging.log(logging.Debug, "Serializing files")
   let files =
     // Reverse fold keeps the files in the correct order.
     iv.fold(index.files, <<>>, fn(acc, filename) {
@@ -207,7 +207,8 @@ pub fn serialize(index: Index) -> BitArray {
 
   let trigrams_count = dict.size(index.trigrams)
 
-  log.debug(
+  logging.log(
+    logging.Debug,
     "Serializing " <> int.to_string(dict.size(index.trigrams)) <> " trigrams",
   )
   let #(trigrams, _) =
@@ -217,7 +218,11 @@ pub fn serialize(index: Index) -> BitArray {
       let file_indices_count = set.size(file_indices)
 
       case i % 1000 == 0 {
-        True -> log.debug("Processed " <> int.to_string(i) <> " trigrams")
+        True ->
+          logging.log(
+            logging.Debug,
+            "Processed " <> int.to_string(i) <> " trigrams",
+          )
         False -> Nil
       }
 
@@ -238,7 +243,8 @@ pub fn serialize(index: Index) -> BitArray {
       )
     })
 
-  log.debug("Returning from serialize")
+  logging.log(logging.Debug, "Returning from serialize")
+
   <<
     file_count:little-size(32),
     files:bits,

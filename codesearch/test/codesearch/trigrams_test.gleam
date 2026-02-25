@@ -61,7 +61,7 @@ pub fn fold_trigrams__division_sign_in_middle__test() {
 }
 
 pub fn fold_trigrams__division_sign_in_middle_2__test() {
-  assert trigram_list_from_string("abc") == Ok([])
+  assert trigram_list_from_string("ab÷c") == Ok([])
 }
 
 pub fn fold_trigrams__ascii_separated_by_division__test() {

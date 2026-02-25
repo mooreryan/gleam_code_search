@@ -1,6 +1,5 @@
 import argv
 import codesearch/index.{type Index, Index}
-import codesearch/log
 import codesearch/trigrams
 import filepath
 import gleam/dict
@@ -13,6 +12,7 @@ import gleam/string
 import gleam/time/calendar
 import gleam/time/timestamp
 import iv
+import logging
 import simplifile
 
 type Config {
@@ -20,17 +20,18 @@ type Config {
 }
 
 pub fn main() {
-  log.configure()
+  logging.configure(logging.Config(show_timestamp: True))
 
   use config <- result.try(config())
 
-  log.info("Getting files to index")
+  logging.log(logging.Info, "Getting files to index")
   let #(corpus_files, errors) =
     get_files(config.corpus_directory) |> result.partition
 
   log_file_errors(errors)
 
-  log.debug(
+  logging.log(
+    logging.Debug,
     "Total files to index: " <> int.to_string(list.length(corpus_files)),
   )
 
@@ -39,13 +40,13 @@ pub fn main() {
     config.corpus_directory,
   ))
 
-  log.info("Writing index json")
+  logging.log(logging.Info, "Writing index json")
   use Nil <- result.try(
     write_index_binary(index, config.outfile)
     |> result.map_error(simplifile.describe_error),
   )
 
-  log.info("Done")
+  logging.log(logging.Info, "Done")
 
   Ok(Nil)
 }
@@ -105,7 +106,10 @@ fn log_file_errors(errors: List(#(String, simplifile.FileError))) -> Nil {
   case errors {
     [] -> Nil
     errors -> {
-      log.error("Errors occurred while getting some files to index")
+      logging.log(
+        logging.Error,
+        "Errors occurred while getting some files to index",
+      )
       use #(filename, file_error) <- list.each(errors)
       let msg =
         "Error getting file "
@@ -113,7 +117,7 @@ fn log_file_errors(errors: List(#(String, simplifile.FileError))) -> Nil {
         <> ": "
         <> simplifile.describe_error(file_error)
 
-      log.error(msg)
+      logging.log(logging.Error, msg)
     }
   }
 }
@@ -122,13 +126,13 @@ fn process_corpus_files(
   corpus_files: List(String),
   corpus_directory: String,
 ) -> Result(Index, String) {
-  log.info("Filtering files")
+  logging.log(logging.Info, "Filtering files")
   let corpus_files =
     corpus_files
     |> list.sort(string.compare)
     |> filter_corpus_files
 
-  log.debug("Indexing files")
+  logging.log(logging.Debug, "Indexing files")
 
   let files_without_dir =
     list.map(corpus_files, fn(file) {
@@ -189,7 +193,7 @@ fn debug(x: a, msg: String) {
 
   let msg = now <> " " <> msg
 
-  log.debug(msg)
+  logging.log(logging.Debug, msg)
 
   x
 }
@@ -198,11 +202,15 @@ fn debug(x: a, msg: String) {
 // faster, but uses a lot more memory, since you have to store more copies of
 // each file_index.  So, keep it a set ;)
 fn index_file(index: index.Index, file: String, file_index: Int) {
-  log.debug("Indexing file " <> int.to_string(file_index + 1) <> ": " <> file)
+  logging.log(
+    logging.Debug,
+    "Indexing file " <> int.to_string(file_index + 1) <> ": " <> file,
+  )
 
   case simplifile.read_bits(file) {
     Error(e) -> {
-      log.error(
+      logging.log(
+        logging.Error,
         "Error reading file: " <> file <> ": " <> simplifile.describe_error(e),
       )
       index
