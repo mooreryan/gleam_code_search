@@ -1,11 +1,18 @@
 import gleam/set.{type Set}
 import gleam/string
 
-pub fn unique_trigrams(data: BitArray) -> Result(Set(String), Nil) {
-  data
-  |> fold_trigrams(from: set.new(), with: fn(acc, trigram) {
-    set.insert(acc, trigram)
-  })
+/// If there are no trigrams, return an empty set.
+pub fn unique_trigrams(data: BitArray) -> Set(String) {
+  let result =
+    data
+    |> fold_trigrams(from: set.new(), with: fn(acc, trigram) {
+      set.insert(acc, trigram)
+    })
+
+  case result {
+    Ok(trigrams) -> trigrams
+    Error(Nil) -> set.new()
+  }
 }
 
 @internal

@@ -1,12 +1,14 @@
-import codesearch/index.{type Index}
+import codesearch/corpus.{type Corpus}
+import codesearch/serde
 import contour
 import envoy
+import filepath
 import formal/form.{type Form}
 import gleam/erlang/process
 import gleam/http.{Get, Post}
 import gleam/int
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/otp/static_supervisor
 import gleam/otp/supervision
@@ -14,6 +16,7 @@ import gleam/result
 import gleam/string
 import gleam/uri
 import lifeguard
+import logging
 import lustre/attribute
 import lustre/element
 import lustre/element/html
@@ -41,31 +44,56 @@ pub fn main() -> Nil {
 }
 
 pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
-  wisp.configure_logger()
-  wisp.set_logger_level(wisp.InfoLevel)
+  logging.configure_with(logging.default_config())
+  wisp.set_logger_level(wisp.DebugLevel)
 
   // We don't use the secret key in this app, so just generate a random one at
   // start.
   let secret_key_base = wisp.random_string(64)
 
-  let assert Ok(index_path) = envoy.get("GLEAM_CODESEARCH_INDEX")
-    as "env var GLEAM_CODESEARCH_INDEX was not set"
-  let assert Ok(True) = simplifile.is_file(index_path)
-    as { "index file " <> index_path <> " does not exist" }
+  let assert Ok(index_directory) = envoy.get("GLEAM_CODESEARCH_INDEX_DIRECTORY")
+    as "env var GLEAM_CODESEARCH_INDEX_DIRECTORY was not set"
+  let assert Ok(True) = simplifile.is_directory(index_directory)
+    as { "index directory " <> index_directory <> " does not exist" }
 
-  // This is the directory where the files that went into the index live.
-  let assert Ok(index_data_directory) =
-    envoy.get("GLEAM_CODESEARCH_INDEX_DATA_DIRECTORY")
-    as "env var GLEAM_CODESEARCH_INDEX_DATA_DIRECTORY was not set"
-  let assert Ok(True) = simplifile.is_directory(index_data_directory)
-    as { "index data directory " <> index_data_directory <> " does not exist" }
+  let index_path = filepath.join(index_directory, "gleam_packages.index")
+  let assert Ok(True) = simplifile.is_file(index_path)
+    as { "index_path " <> index_path <> " does not exist" }
+
+  let index_path_parent = filepath.join(index_directory, "..")
+  let assert Ok(index_path_parent) = filepath.expand(index_path_parent)
+  let assert Ok(True) = simplifile.is_directory(index_path_parent)
+    as { "index_path_parent " <> index_path_parent <> " does not exist" }
 
   wisp.log_debug("Reading index")
-  let assert Ok(index) = index.read_binary(index_path)
-    as { "failed to read and parse index: " <> index_path }
+  let assert Ok(index_bits) = simplifile.read_bits(index_path)
+    as { "failed to read index: " <> index_path }
+
+  let corpus = {
+    logging.log(logging.Debug, "Deserializing files")
+    let assert Ok(parsed) = corpus.deserialize_files(index_bits)
+    let files = parsed.value
+
+    logging.log(logging.Debug, "Deserializing trigram index")
+    let assert Ok(parsed) = corpus.deserialize_trigram_index(parsed.remaining)
+    let trigram_index = parsed.value
+
+    logging.log(logging.Debug, "Deserializing package metadata")
+    let assert Ok(parsed) =
+      serde.deserialize_list(
+        parsed.remaining,
+        corpus.deserialize_package_metadata,
+      )
+      |> result.map_error(corpus.SerdeError)
+
+    let package_metadata = parsed.value
+
+    logging.log(logging.Debug, "Done deserializing")
+    corpus.Corpus(files:, trigram_index:, package_metadata:)
+  }
 
   wisp.log_debug("Putting index")
-  put_index(index)
+  put_corpus(corpus)
 
   wisp.log_debug("Starting server")
 
@@ -82,7 +110,7 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
 
   let assert Ok(supervisor) =
     static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(searcher(searcher_name, index_data_directory))
+    |> static_supervisor.add(searcher(searcher_name, index_path_parent))
     |> static_supervisor.add(server_child_specification)
     |> static_supervisor.start
     as "failed to start supervisor"
@@ -97,7 +125,7 @@ pub fn stop(_: _) -> Nil {
 type SearcherMessage {
   Search(
     reply_to: process.Subject(
-      Result(List(index.SearchResult), List(index.Error)),
+      Result(List(corpus.SearchResult), List(corpus.Error)),
     ),
     query: String,
   )
@@ -105,18 +133,19 @@ type SearcherMessage {
 
 fn searcher(
   pool_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
-  index_data_directory: String,
+  index_directory_parent: String,
 ) -> supervision.ChildSpecification(static_supervisor.Supervisor) {
   let lifeguard_child_spec =
     lifeguard.new(pool_name, Nil)
     |> lifeguard.on_message(fn(state, msg) {
       case msg {
         Search(reply_to:, query:) -> {
+          let corpus = get_corpus()
           let search_result =
-            index.search_query(
+            corpus.search_query(
               query,
-              get_index(),
-              index_data_directory,
+              corpus,
+              index_directory_parent,
               wisp.log_debug,
             )
 
@@ -135,7 +164,7 @@ fn search(
   searcher_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
   query: String,
 ) -> Result(
-  Result(List(index.SearchResult), List(index.Error)),
+  Result(List(corpus.SearchResult), List(corpus.Error)),
   lifeguard.ApplyError,
 ) {
   lifeguard.call(
@@ -159,19 +188,21 @@ fn static_directory() -> String {
   priv_directory <> "/static"
 }
 
-@external(erlang, "persistent_term", "put")
-fn do_put_index(key: String, index: Index) -> Nil
+const server_corpus_term_key = "server-corpus"
 
-fn put_index(index: Index) -> Nil {
-  let _ = do_put_index("server-index", index)
+@external(erlang, "persistent_term", "put")
+fn do_put_corpus(key: String, corpus: Corpus) -> Nil
+
+fn put_corpus(corpus: Corpus) -> Nil {
+  let _ = do_put_corpus(server_corpus_term_key, corpus)
   Nil
 }
 
 @external(erlang, "persistent_term", "get")
-fn do_get_index(key: String) -> Index
+fn do_get_corpus(key: String) -> Corpus
 
-fn get_index() -> Index {
-  do_get_index("server-index")
+fn get_corpus() -> Corpus {
+  do_get_corpus(server_corpus_term_key)
 }
 
 fn handle_request(request: Request, context: Context) -> Response {
@@ -191,7 +222,7 @@ fn handle_home_page_request(request: Request) -> Response {
   use <- wisp.require_method(request, Get)
   let empty_form = search_form()
   let page = home_page(empty_form)
-  let body = render_page(page, title: option.None)
+  let body = render_page(page, title: None)
   wisp.html_response(body, 200)
 }
 
@@ -211,7 +242,7 @@ fn handle_search_post_request(request: Request) -> Response {
 
     Error(form) -> {
       // Rerender the home page, the form has errors now.
-      let body = render_page(home_page(form), title: option.None)
+      let body = render_page(home_page(form), title: None)
       wisp.html_response(body, 422)
     }
   }
@@ -257,42 +288,12 @@ fn handle_search_get_request(request: Request, context: Context) -> Response {
 
             Error(errors) -> {
               let msg_for_log =
-                errors |> list.map(string.inspect) |> string.join(with: ";")
+                errors |> list.map(string.inspect) |> string.join(with: "; ")
               wisp.log_error(msg_for_log)
 
-              let #(search_failed_errors, server_errors) =
-                list.partition(errors, fn(error) {
-                  case error {
-                    index.SearchFailed(_) -> True
-                    index.ServerError(_) -> False
-                  }
-                })
-
-              case search_failed_errors, server_errors {
-                // This should be impossible. Don't even bother sending a real
-                // page to the user.
-                [], [] -> {
-                  wisp.internal_server_error()
-                }
-                _search_failed_errors, [] -> {
-                  render_page(
-                    search_results_page(
-                      current_page: page,
-                      total_pages: 0,
-                      total_results: 0,
-                      search_results: [],
-                      query:,
-                    ),
-                    title: Some("Search Results"),
-                  )
-                  |> wisp.html_response(200)
-                }
-                [], _server_errors | _, _server_errors -> {
-                  internal_server_error_page()
-                  |> render_page(title: Some("Internal Server Error"))
-                  |> wisp.html_response(500)
-                }
-              }
+              internal_server_error_page()
+              |> render_page(title: Some("Internal Server Error"))
+              |> wisp.html_response(500)
             }
           }
         }
@@ -314,7 +315,7 @@ fn search_results_page(
   // This is the REAL total, not the amount returned in the current page
   total_results total_results: Int,
   // This will generally be shorter than total results, as they are paginated
-  search_results search_results: List(index.SearchResult),
+  search_results search_results: List(corpus.SearchResult),
   query query: String,
 ) -> element.Element(a) {
   html.div([attribute.class("space-y-6 pb-4")], [
@@ -348,7 +349,7 @@ fn search_results_page(
   ])
 }
 
-fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
+fn search_result_view(search_result: corpus.SearchResult) -> element.Element(a) {
   // Lines that are "empty" should still put a break in the code. Since we split
   // on the newline, add it back in to empty lines, so that the div won't be
   // "empty", and will show properly as a newline.
@@ -411,7 +412,7 @@ fn search_result_view(search_result: index.SearchResult) -> element.Element(a) {
   let code = html.code([attribute.class("text-sm")], highlighted_code)
 
   let line_numbers =
-    index.search_result_line_numbers(search_result)
+    corpus.search_result_line_numbers(search_result)
     |> list.map(fn(line_number) {
       html.div([], [html.text(format_with_commas(line_number))])
     })
@@ -724,7 +725,7 @@ fn layout(
   title title: option.Option(String),
 ) -> element.Element(a) {
   let title = case title {
-    option.None -> "Gleam Code Search"
+    None -> "Gleam Code Search"
     Some(title) -> title <> " | Gleam Code Search"
   }
 

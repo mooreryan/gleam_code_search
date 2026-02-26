@@ -13,20 +13,23 @@ version = "1.0.0"
 # https://gleam.run/writing-gleam/gleam-toml/.
 
 [dependencies]
-gleam_stdlib = ">= 0.44.0 and < 2.0.0"
-mist = ">= 5.0.4 and < 6.0.0"
-wisp = ">= 2.2.0 and < 3.0.0"
-gleam_erlang = ">= 1.3.0 and < 2.0.0"
-lustre = ">= 5.5.2 and < 6.0.0"
-formal = ">= 3.0.0 and < 4.0.0"
-
 codesearch = { path = "../codesearch" }
+contour = ">= 1.2.1 and < 2.0.0"
 envoy = ">= 1.1.0 and < 2.0.0"
+formal = ">= 3.0.0 and < 4.0.0"
+gleam_erlang = ">= 1.3.0 and < 2.0.0"
 gleam_http = ">= 4.3.0 and < 5.0.0"
 gleam_otp = ">= 1.2.0 and < 2.0.0"
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
 lifeguard = ">= 4.0.0 and < 5.0.0"
+logging = { git = "https://github.com/mooreryan/logging.git", ref = "timestamp" }
+lustre = ">= 5.5.2 and < 6.0.0"
+mist = ">= 5.0.4 and < 6.0.0"
 simplifile = ">= 2.3.2 and < 3.0.0"
-contour = ">= 1.2.1 and < 2.0.0"
+wisp = ">= 2.2.0 and < 3.0.0"
+gleam_json = ">= 3.1.0 and < 4.0.0"
+iv = ">= 1.4.1 and < 2.0.0"
+filepath = ">= 1.1.2 and < 2.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
