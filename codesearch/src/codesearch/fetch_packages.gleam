@@ -56,16 +56,36 @@ fn run() {
     |> result.replace_error(MissingEnvVariableError("HEX_API_KEY")),
   )
 
-  use outdir <- result.try(case argv.load().arguments {
-    [outdir] -> Ok(outdir)
-    _ -> Error(BadCliArgsError)
-  })
+  use #(source_outdir, metadata_outdir) <- result.try(
+    case argv.load().arguments {
+      [source_outdir, metadata_outdir] -> Ok(#(source_outdir, metadata_outdir))
+      _ -> Error(BadCliArgsError)
+    },
+  )
+
+  use Nil <- result.try(
+    simplifile.create_directory_all(source_outdir)
+    |> result.map_error(FileError),
+  )
+  use Nil <- result.try(
+    simplifile.create_directory_all(metadata_outdir)
+    |> result.map_error(FileError),
+  )
 
   logging.log(logging.Info, "starting to fetch packages")
   use stdlib_package <- result.try(fetch_stdlib(hex_api_key))
   use stdlib_dependent_packages <- result.try(fetch_packages(hex_api_key))
 
   let gleam_packages = [stdlib_package, ..stdlib_dependent_packages]
+
+  logging.log(logging.Info, "writing metadata")
+  let metadata_outfile = filepath.join(metadata_outdir, "package_metadata.json")
+  use Nil <- result.try(
+    json.array(gleam_packages, hex_package_to_json)
+    |> json.to_string
+    |> simplifile.write(to: metadata_outfile, contents: _)
+    |> result.map_error(FileError),
+  )
 
   logging.log(
     logging.Info,
@@ -84,8 +104,8 @@ fn run() {
       )
       use tarball <- result.try(fetch_tarball(hex_package))
       let full_name = package_full_name(hex_package)
-      let outdir = filepath.join(outdir, full_name)
-      use Nil <- result.try(extract_source_files(tarball, outdir))
+      let source_outdir = filepath.join(source_outdir, full_name)
+      use Nil <- result.try(extract_source_files(tarball, source_outdir))
       Ok(i + 1)
     }),
   )
@@ -173,6 +193,39 @@ pub type HexPackage {
     updated_at: String,
     latest_version: String,
   )
+}
+
+fn hex_package_decoder() -> decode.Decoder(HexPackage) {
+  use name <- decode.field("name", decode.string)
+  use inserted_at <- decode.field("inserted_at", decode.string)
+  use updated_at <- decode.field("updated_at", decode.string)
+  use latest_version <- decode.field("latest_version", decode.string)
+  decode.success(HexPackage(name:, updated_at:, inserted_at:, latest_version:))
+}
+
+fn hex_packages_decoder() -> decode.Decoder(List(HexPackage)) {
+  decode.list(hex_package_decoder())
+}
+
+fn decode_hex_packages(
+  json: String,
+) -> Result(List(HexPackage), json.DecodeError) {
+  json.parse(json, hex_packages_decoder())
+}
+
+fn decode_hex_package(json: String) -> Result(HexPackage, json.DecodeError) {
+  json.parse(json, hex_package_decoder())
+}
+
+pub fn hex_package_to_json(hex_package: HexPackage) -> json.Json {
+  let HexPackage(name:, inserted_at:, updated_at:, latest_version:) =
+    hex_package
+  json.object([
+    #("name", json.string(name)),
+    #("inserted_at", json.string(inserted_at)),
+    #("updated_at", json.string(updated_at)),
+    #("latest_version", json.string(latest_version)),
+  ])
 }
 
 fn package_full_name(hex_package: HexPackage) -> String {
@@ -270,26 +323,4 @@ fn accept_file(path: String) -> Result(String, Error) {
     Ok(False) -> Error(NotAFileError(path))
     Error(e) -> Error(FileError(e))
   }
-}
-
-fn hex_package_decoder() -> decode.Decoder(HexPackage) {
-  use name <- decode.field("name", decode.string)
-  use inserted_at <- decode.field("inserted_at", decode.string)
-  use updated_at <- decode.field("updated_at", decode.string)
-  use latest_version <- decode.field("latest_version", decode.string)
-  decode.success(HexPackage(name:, updated_at:, inserted_at:, latest_version:))
-}
-
-fn hex_packages_decoder() -> decode.Decoder(List(HexPackage)) {
-  decode.list(hex_package_decoder())
-}
-
-fn decode_hex_packages(
-  json: String,
-) -> Result(List(HexPackage), json.DecodeError) {
-  json.parse(json, hex_packages_decoder())
-}
-
-fn decode_hex_package(json: String) -> Result(HexPackage, json.DecodeError) {
-  json.parse(json, hex_package_decoder())
 }
