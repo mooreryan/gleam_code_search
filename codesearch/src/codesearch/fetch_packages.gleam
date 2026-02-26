@@ -22,15 +22,15 @@ import simplifile
 const http_request_wait_millis = 1000
 
 pub type Error {
-  BadCliArgs
+  BadCliArgsError
   FailedToBuildRequestError
   FileError(simplifile.FileError)
   HttpcError(httpc.HttpError)
   JsonDecodeError(json.DecodeError)
-  MissingEnvVariable(name: String)
-  NotAFile(path: String)
+  MissingEnvVariableError(name: String)
+  NotAFileError(path: String)
   TarError(tar.Error)
-  UnexpectedHttpResponseStatusCode(expected: Int, received: Int)
+  UnexpectedHttpResponseStatusCodeError(expected: Int, received: Int)
 }
 
 // TODO: move all ffi into one file
@@ -53,12 +53,12 @@ pub fn main() -> Nil {
 fn run() {
   use hex_api_key <- result.try(
     envoy.get("HEX_API_KEY")
-    |> result.replace_error(MissingEnvVariable("HEX_API_KEY")),
+    |> result.replace_error(MissingEnvVariableError("HEX_API_KEY")),
   )
 
   use outdir <- result.try(case argv.load().arguments {
     [outdir] -> Ok(outdir)
-    _ -> Error(BadCliArgs)
+    _ -> Error(BadCliArgsError)
   })
 
   logging.log(logging.Info, "starting to fetch packages")
@@ -121,7 +121,7 @@ fn http_send(request: request.Request(String)) -> Result(String, Error) {
   case response.status {
     200 -> Ok(response.body)
     code ->
-      Error(UnexpectedHttpResponseStatusCode(expected: 200, received: code))
+      Error(UnexpectedHttpResponseStatusCodeError(expected: 200, received: code))
   }
 }
 
@@ -216,7 +216,7 @@ pub fn fetch_tarball(hex_package: HexPackage) -> Result(BitArray, Error) {
   case response.status {
     200 -> Ok(response.body)
     code ->
-      Error(UnexpectedHttpResponseStatusCode(expected: 200, received: code))
+      Error(UnexpectedHttpResponseStatusCodeError(expected: 200, received: code))
   }
 }
 
@@ -267,7 +267,7 @@ fn extract_source_files(tarball: BitArray, outdir: String) -> Result(Nil, Error)
 fn accept_file(path: String) -> Result(String, Error) {
   case simplifile.is_file(path) {
     Ok(True) -> Ok(path)
-    Ok(False) -> Error(NotAFile(path))
+    Ok(False) -> Error(NotAFileError(path))
     Error(e) -> Error(FileError(e))
   }
 }
