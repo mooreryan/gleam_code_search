@@ -1,4 +1,4 @@
-import codesearch/corpus.{type Corpus}
+import codesearch/corpus.{type Corpus, type PackageMetadata}
 import codesearch/serde
 import contour
 import envoy
@@ -8,12 +8,15 @@ import gleam/erlang/process
 import gleam/http.{Get, Post}
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/otp/actor
 import gleam/otp/static_supervisor
 import gleam/otp/supervision
 import gleam/result
 import gleam/string
+import gleam/time/calendar.{type Date}
+import gleam/time/timestamp.{type Timestamp}
 import gleam/uri
 import lifeguard
 import logging
@@ -134,6 +137,7 @@ type SearcherMessage {
       Result(List(corpus.SearchResult), List(corpus.Error)),
     ),
     query: String,
+    predicates: List(fn(PackageMetadata) -> Bool),
   )
 }
 
@@ -145,13 +149,15 @@ fn searcher(
     lifeguard.new(pool_name, Nil)
     |> lifeguard.on_message(fn(state, msg) {
       case msg {
-        Search(reply_to:, query:) -> {
+        Search(reply_to:, query:, predicates:) -> {
           let corpus = get_corpus()
+
           let search_result =
             corpus.search_query(
               query,
               corpus,
               index_directory_parent,
+              predicates,
               wisp.log_debug,
             )
 
@@ -168,14 +174,15 @@ fn searcher(
 
 fn search(
   searcher_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
-  query: String,
+  query query: String,
+  predicates predicates: List(fn(PackageMetadata) -> Bool),
 ) -> Result(
   Result(List(corpus.SearchResult), List(corpus.Error)),
   lifeguard.ApplyError,
 ) {
   lifeguard.call(
     process.named_subject(searcher_name),
-    Search(reply_to: _, query:),
+    Search(reply_to: _, query:, predicates:),
     call_timeout: searcher_call_timeout_millis,
     // TODO: I'm not 100% clear on how this interacts with the call_timout!
     checkout_timeout: searcher_checkout_timeout_millis,
@@ -243,7 +250,7 @@ fn handle_search_post_request(request: Request) -> Response {
     Ok(search_form) ->
       // We always start on page 1 from a post
       wisp.redirect(
-        "/search?page=1&q=" <> uri.percent_encode(search_form.query),
+        "/search?page=1&" <> search_form_to_query_params(search_form),
       )
 
     Error(form) -> {
@@ -260,8 +267,13 @@ fn handle_search_get_request(request: Request, context: Context) -> Response {
   let query_params = wisp.get_query(request)
 
   case parse_search_query_params(query_params) {
-    Ok(SearchQueryParams(query:, page:)) -> {
-      let search_result = search(context.searcher_name, query)
+    Ok(SearchQueryParams(query:, page:, ..) as search_query_params) -> {
+      let search_result =
+        search(
+          context.searcher_name,
+          query:,
+          predicates: search_query_params_to_predicates(search_query_params),
+        )
 
       case search_result {
         Ok(search_result) -> {
@@ -570,9 +582,65 @@ fn home_page(form: Form(SearchForm)) -> element.Element(a) {
 }
 
 type SearchForm {
-  SearchForm(query: String)
+  // TODO: start here!
+  SearchForm(
+    query: String,
+    package_name: Option(String),
+    minimum_inserted_at: Option(Timestamp),
+    maximum_inserted_at: Option(Timestamp),
+    minimum_updated_at: Option(Timestamp),
+    maximum_updated_at: Option(Timestamp),
+  )
 }
 
+fn search_form_to_query_params(search_form: SearchForm) {
+  [
+    Some(#("q", search_form.query)),
+    search_form.package_name
+      |> option.map(fn(package_name) { #("package_name", package_name) }),
+    search_form.minimum_inserted_at
+      |> option.map(fn(minimum_inserted_at) {
+        #("minimum_inserted_at", timestamp_to_date(minimum_inserted_at))
+      }),
+    search_form.maximum_inserted_at
+      |> option.map(fn(maximum_inserted_at) {
+        #("maximum_inserted_at", timestamp_to_date(maximum_inserted_at))
+      }),
+    search_form.minimum_updated_at
+      |> option.map(fn(minimum_updated_at) {
+        #("minimum_updated_at", timestamp_to_date(minimum_updated_at))
+      }),
+    search_form.maximum_updated_at
+      |> option.map(fn(maximum_updated_at) {
+        #("maximum_updated_at", timestamp_to_date(maximum_updated_at))
+      }),
+  ]
+  |> list_filter_option
+  |> list.reverse
+  |> uri.query_to_string
+}
+
+fn list_filter_option(l: List(Option(a))) -> List(a) {
+  list.fold(l, [], fn(acc, opt) {
+    case opt {
+      None -> acc
+      Some(x) -> [x, ..acc]
+    }
+  })
+}
+
+fn timestamp_to_date(timestamp: Timestamp) -> String {
+  let #(date, _time) = timestamp.to_calendar(timestamp, calendar.utc_offset)
+  let calendar.Date(year:, month:, day:) = date
+
+  int.to_string(year)
+  <> "-"
+  <> int.to_string(calendar.month_to_int(month))
+  <> "-"
+  <> int.to_string(day)
+}
+
+// TODO: any more param validation needed here?
 fn search_form() -> Form(SearchForm) {
   form.new({
     use query <- form.field("query", {
@@ -581,12 +649,103 @@ fn search_form() -> Form(SearchForm) {
       |> form.check_string_length_more_than(min_query_length - 1)
       |> form.check_string_length_less_than(max_query_length + 1)
     })
-    form.success(SearchForm(query:))
+    use package_name <- form.field("package_name", {
+      form.parse_optional(form.parse_string)
+    })
+    use minimum_inserted_at <- form.field(
+      "minimum_inserted_at",
+      form_parse_timestamp(),
+    )
+    use maximum_inserted_at <- form.field(
+      "maximum_inserted_at",
+      form_parse_timestamp(),
+    )
+    use minimum_updated_at <- form.field(
+      "minimum_updated_at",
+      form_parse_timestamp(),
+    )
+    use maximum_updated_at <- form.field(
+      "maximum_updated_at",
+      form_parse_timestamp(),
+    )
+    form.success(SearchForm(
+      query:,
+      package_name:,
+      minimum_inserted_at:,
+      maximum_inserted_at:,
+      minimum_updated_at:,
+      maximum_updated_at:,
+    ))
   })
 }
 
+fn form_parse_timestamp() -> form.Parser(Option(Timestamp)) {
+  form.parse_optional(form.parse_date)
+  |> form.map(option.map(_, timestamp_from_date))
+}
+
+fn timestamp_from_date(date) {
+  timestamp.from_calendar(
+    date:,
+    time: calendar.TimeOfDay(0, 0, 0, 0),
+    offset: calendar.utc_offset,
+  )
+}
+
+/// NOTE: this goes along with the SearchForm type. So check it out!
 type SearchQueryParams {
-  SearchQueryParams(query: String, page: Int)
+  SearchQueryParams(
+    query: String,
+    page: Int,
+    package_name: Option(String),
+    minimum_inserted_at: Option(Timestamp),
+    maximum_inserted_at: Option(Timestamp),
+    minimum_updated_at: Option(Timestamp),
+    maximum_updated_at: Option(Timestamp),
+  )
+}
+
+fn search_query_params_to_predicates(
+  params: SearchQueryParams,
+) -> List(fn(PackageMetadata) -> Bool) {
+  [
+    optional_predicate(params.package_name, fn(name) {
+      fn(pm: PackageMetadata) { pm.name == name }
+    }),
+    optional_predicate(params.minimum_inserted_at, fn(minimum) {
+      fn(pm: PackageMetadata) { at_or_after(pm.inserted_at, minimum) }
+    }),
+    optional_predicate(params.minimum_updated_at, fn(minimum) {
+      fn(pm: PackageMetadata) { at_or_after(pm.updated_at, minimum) }
+    }),
+    optional_predicate(params.maximum_inserted_at, fn(maximum) {
+      fn(pm: PackageMetadata) { at_or_before(pm.inserted_at, maximum) }
+    }),
+    optional_predicate(params.maximum_updated_at, fn(maximum) {
+      fn(pm: PackageMetadata) { at_or_before(pm.updated_at, maximum) }
+    }),
+  ]
+  |> list.flatten
+}
+
+/// This is like option.map but puts results in lists.
+///
+fn optional_predicate(
+  option: Option(a),
+  to_predicate: fn(a) -> fn(PackageMetadata) -> Bool,
+) -> List(fn(PackageMetadata) -> Bool) {
+  case option {
+    None -> []
+    Some(value) -> [to_predicate(value)]
+  }
+}
+
+fn at_or_after(field_value: Timestamp, minimum: Timestamp) -> Bool {
+  timestamp.compare(field_value, minimum) != order.Lt
+}
+
+fn at_or_before(field_value: Timestamp, maximum: Timestamp) -> Bool {
+  timestamp.compare(field_value, maximum) != order.Gt
 }
 
 /// This one is for parsing the search query when it is encoded in a query
@@ -600,18 +759,79 @@ fn parse_search_query_params(
     Error(Nil) -> 1
   }
 
-  let query = list.key_find(query_params, "q")
+  // TODO: would be better to return all the errors rather than the first one!
 
-  case query {
+  use query <- result.try(case list.key_find(query_params, "q") {
     Ok(query) -> {
       case string.length(query) {
-        n if min_query_length <= n && n <= max_query_length ->
-          Ok(SearchQueryParams(query:, page:))
+        n if min_query_length <= n && n <= max_query_length -> Ok(query)
         _ -> Error("missing or malformed query string")
       }
     }
 
     Error(Nil) -> Error("missing or malformed query string")
+  })
+
+  use minimum_inserted_at <- result.try(
+    list.key_find(query_params, "minimum_inserted_at") |> maybe_parse_timestamp,
+  )
+
+  use maximum_inserted_at <- result.try(
+    list.key_find(query_params, "maximum_inserted_at") |> maybe_parse_timestamp,
+  )
+
+  use minimum_updated_at <- result.try(
+    list.key_find(query_params, "minimum_updated_at") |> maybe_parse_timestamp,
+  )
+
+  use maximum_updated_at <- result.try(
+    list.key_find(query_params, "maximum_updated_at") |> maybe_parse_timestamp,
+  )
+
+  let package_name = case list.key_find(query_params, "package_name") {
+    Ok(package_name) -> Some(package_name)
+    Error(Nil) -> None
+  }
+
+  Ok(SearchQueryParams(
+    query:,
+    page:,
+    package_name:,
+    minimum_inserted_at:,
+    maximum_inserted_at:,
+    minimum_updated_at:,
+    maximum_updated_at:,
+  ))
+}
+
+fn maybe_parse_timestamp(
+  input: Result(String, Nil),
+) -> Result(Option(Timestamp), String) {
+  case input {
+    Error(Nil) -> Ok(None)
+    Ok(input) -> {
+      case parse_date(input) {
+        Error(Nil) -> Error("failed to parse date " <> input)
+        Ok(date) -> Ok(Some(timestamp_from_date(date)))
+      }
+    }
+  }
+}
+
+fn parse_date(input: String) -> Result(Date, Nil) {
+  case string.split(input, "-") {
+    [year, month, day] -> {
+      use year <- result.try(int.parse(year))
+      use month <- result.try(int.parse(month))
+      use day <- result.try(int.parse(day))
+      use month <- result.try(calendar.month_from_int(month))
+      let date = calendar.Date(year, month, day)
+      case calendar.is_valid_date(date) {
+        True -> Ok(date)
+        False -> Error(Nil)
+      }
+    }
+    _ -> Error(Nil)
   }
 }
 
@@ -638,11 +858,11 @@ fn search_form_view(form: Form(SearchForm)) -> element.Element(b) {
             html.text("Search"),
           ]),
 
-          html.div([], [
-            html.label([attribute.for("query"), attribute.class("label")], [
-              html.text("Query"),
-            ]),
-            html.input([
+          // Required query field
+          field_view(
+            label_text: "Code",
+            input_id: "query",
+            input_attrs: [
               attribute.type_("text"),
               attribute.name("query"),
               attribute.id("query"),
@@ -651,22 +871,36 @@ fn search_form_view(form: Form(SearchForm)) -> element.Element(b) {
               attribute.maxlength(max_query_length),
               attribute.value(form.field_value(form, "query")),
               attribute.class("input validator font-mono"),
+            ],
+            hint: Some("⚠️ Must be between 3 and 64 characters"),
+            errors: form.field_error_messages(form, "query"),
+          ),
+
+          // TODO: make sure the validation errors work here!
+          // Optional filters
+          html.details([attribute.class("collapse")], [
+            html.summary([attribute.class("label cursor-pointer")], [
+              html.text("Filters"),
             ]),
 
-            // HTML5 validation errors
-            html.span([attribute.class("validator-hint font-bold")], [
-              html.text("⚠️ Must be between 3 and 64 characters"),
-            ]),
+            html.div([attribute.class("mt-2 flex flex-col gap-2")], [
+              field_view(
+                label_text: "Package name",
+                input_id: "package_name",
+                input_attrs: [
+                  attribute.type_("text"),
+                  attribute.name("package_name"),
+                  attribute.id("package_name"),
+                  attribute.value(form.field_value(form, "package_name")),
+                  attribute.class("input font-mono"),
+                ],
+                hint: None,
+                errors: form.field_error_messages(form, "package_name"),
+              ),
 
-            // Any backend form errors
-            html.div(
-              [],
-              list.map(form.field_error_messages(form, "query"), fn(msg) {
-                html.p([attribute.class("text-error")], [
-                  element.text(msg),
-                ])
-              }),
-            ),
+              date_range_view(legend: "Inserted at", base: "inserted_at", form:),
+              date_range_view(legend: "Updated at", base: "updated_at", form:),
+            ]),
           ]),
 
           html.button(
@@ -677,6 +911,100 @@ fn search_form_view(form: Form(SearchForm)) -> element.Element(b) {
       ),
     ],
   )
+}
+
+/// A reusable field helper that uses the label/input/errors pattern.
+///
+/// `hint` is the HTML5 validator message: pass None for fields without
+/// constraints.
+///
+fn field_view(
+  label_text label_text: String,
+  input_id input_id: String,
+  input_attrs input_attrs: List(attribute.Attribute(a)),
+  hint hint: Option(String),
+  errors errors: List(String),
+) -> element.Element(a) {
+  html.div([attribute.class("mb-2")], [
+    html.label([attribute.for(input_id), attribute.class("label")], [
+      html.text(label_text),
+    ]),
+    html.input(input_attrs),
+
+    // HTML5 validation errors
+    case hint {
+      Some(hint) ->
+        html.span([attribute.class("validator-hint font-bold")], [
+          html.text(hint),
+        ])
+      None -> element.none()
+    },
+
+    // Any backend form errors
+    html.div(
+      [],
+      list.map(errors, fn(msg) {
+        html.p([attribute.class("text-error")], [element.text(msg)])
+      }),
+    ),
+  ])
+}
+
+// TODO: update the search form!
+
+/// A date range component (use it for both inserted_at and updated_at).
+///
+/// - `base` is the field name base, e.g. "inserted_at" ->
+/// "minimum_inserted_at and "maximum_inserted_at"
+///
+fn date_range_view(
+  legend legend: String,
+  base base: String,
+  form form: Form(SearchForm),
+) -> element.Element(a) {
+  let from_id = "minimum_" <> base
+  let to_id = "maximum_" <> base
+
+  html.div([attribute.class("mt-3")], [
+    html.p([attribute.class("label")], [html.text(legend)]),
+    html.div([attribute.class("flex gap-2 items-center")], [
+      field_view(
+        "Minimum",
+        from_id,
+        [
+          attribute.type_("date"),
+          attribute.id(from_id),
+          attribute.name(from_id),
+          attribute.value(form.field_value(form, from_id)),
+          attribute.class("input"),
+          // JS: keep "to" min in sync with "from"
+          attribute.attribute(
+            "onchange",
+            "document.getElementById('" <> to_id <> "').min = this.value",
+          ),
+        ],
+        None,
+        form.field_error_messages(form, from_id),
+      ),
+      field_view(
+        "Maximum",
+        to_id,
+        [
+          attribute.type_("date"),
+          attribute.id(to_id),
+          attribute.name(to_id),
+          attribute.value(form.field_value(form, to_id)),
+          attribute.class("input"),
+          attribute.attribute(
+            "onchange",
+            "document.getElementById('" <> from_id <> "').max = this.value",
+          ),
+        ],
+        None,
+        form.field_error_messages(form, to_id),
+      ),
+    ]),
+  ])
 }
 
 fn no_workers_available_page() -> element.Element(a) {
@@ -728,7 +1056,7 @@ fn internal_server_error_page() -> element.Element(_) {
 
 fn layout(
   content: element.Element(a),
-  title title: option.Option(String),
+  title title: Option(String),
 ) -> element.Element(a) {
   let title = case title {
     None -> "Gleam Code Search"
@@ -768,7 +1096,7 @@ fn layout(
 
 fn render_page(
   content: element.Element(a),
-  title title: option.Option(String),
+  title title: Option(String),
 ) -> String {
   layout(content, title:) |> element.to_document_string
 }

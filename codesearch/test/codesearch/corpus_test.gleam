@@ -1,9 +1,10 @@
-import codesearch/corpus
+import codesearch/corpus.{type Corpus, type PackageMetadata}
 import codesearch/serde_test
 import filepath
 import gleam/dict
 import gleam/int
 import gleam/list
+import gleam/order
 import gleam/set
 import gleam/string
 import gleam/time/timestamp
@@ -109,6 +110,94 @@ pub fn extract_source_files__correctly_sets_permissions__test() {
 //
 //
 
+fn a_corpus() {
+  corpus.Corpus(
+    files: iv.from_list(["file1", "file2", "file3", "file4"]),
+    trigram_index: corpus.TrigramIndex(
+      dict.from_list([
+        #("abc", set.from_list([0])),
+        #("bcd", set.from_list([1])),
+        #("cde", set.from_list([0, 1])),
+        #("def", set.from_list([0, 1, 2])),
+        #("efg", set.from_list([3])),
+      ]),
+    ),
+    package_metadata: [
+      corpus.PackageMetadata(
+        name: "package1",
+        latest_version: "1.2.3",
+        inserted_at: timestamp.from_unix_seconds(0),
+        updated_at: timestamp.from_unix_seconds(1),
+        files: set.from_list([0, 1, 2]),
+      ),
+      corpus.PackageMetadata(
+        name: "package2",
+        latest_version: "4.5.6",
+        inserted_at: timestamp.from_unix_seconds(2),
+        updated_at: timestamp.from_unix_seconds(3),
+        files: set.from_list([3]),
+      ),
+    ],
+  )
+}
+
+pub fn filter_corpus__empty_predicates__test() {
+  let result = corpus.filter_corpus(a_corpus(), [])
+
+  assert result == set.from_list([0, 1, 2, 3])
+}
+
+pub fn filter_corpus_1__test() {
+  let result =
+    corpus.filter_corpus(a_corpus(), [
+      fn(package_metadata: PackageMetadata) {
+        package_metadata.name == "package1"
+      },
+    ])
+
+  assert result == set.from_list([0, 1, 2])
+}
+
+pub fn filter_corpus_2__test() {
+  let newer_than = fn(package_metadata: PackageMetadata, ts) {
+    case timestamp.compare(package_metadata.updated_at, ts) {
+      order.Lt -> False
+      order.Eq -> False
+      order.Gt -> True
+    }
+  }
+
+  let result =
+    corpus.filter_corpus(a_corpus(), [
+      fn(package_metadata: PackageMetadata) {
+        package_metadata.name == "package1"
+        && newer_than(package_metadata, timestamp.from_unix_seconds(100))
+      },
+    ])
+
+  assert result == set.from_list([])
+}
+
+pub fn filter_corpus_3__test() {
+  let newer_than = fn(package_metadata: PackageMetadata, ts) {
+    case timestamp.compare(package_metadata.updated_at, ts) {
+      order.Lt -> False
+      order.Eq -> False
+      order.Gt -> True
+    }
+  }
+
+  let result =
+    corpus.filter_corpus(a_corpus(), [
+      fn(package_metadata: PackageMetadata) {
+        package_metadata.name == "package1"
+        && newer_than(package_metadata, timestamp.from_unix_seconds(0))
+      },
+    ])
+
+  assert result == set.from_list([0, 1, 2])
+}
+
 pub fn corpus_roundtrip_1__test() {
   let the_corpus =
     corpus.Corpus(
@@ -155,7 +244,7 @@ pub fn corpus_roundtrip__test() {
   assert_corpus_equal(deserialized, corpus)
 }
 
-fn assert_corpus_equal(a: corpus.Corpus, b: corpus.Corpus) {
+fn assert_corpus_equal(a: Corpus, b: Corpus) {
   // We need to check the underlying list data as the array internal data isn't
   // stable with our serialization.
   assert iv.to_list(a.files) == iv.to_list(b.files) as "files should be equal"
@@ -212,8 +301,10 @@ pub fn index_source_files__test() {
   // First package
 
   let source_files = list.map(package1, full_path)
-  let assert #(trigram_index, []) =
+  let assert #(trigram_index, [], file_indices) =
     corpus.index_source_files(source_files, 0, trigram_index)
+
+  assert file_indices == set.from_list([0, 1, 2])
 
   let expected =
     dict.from_list([
@@ -227,8 +318,10 @@ pub fn index_source_files__test() {
   // Second package
 
   let source_files = list.map(package2, full_path)
-  let assert #(trigram_index, []) =
+  let assert #(trigram_index, [], file_indices) =
     corpus.index_source_files(source_files, 3, trigram_index)
+
+  assert file_indices == set.from_list([3, 4, 5])
 
   let expected =
     dict.from_list([

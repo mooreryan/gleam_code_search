@@ -331,13 +331,16 @@ fn timestamp_to_json(timestamp: timestamp.Timestamp) -> json.Json {
   json.array([seconds, nanoseconds], json.int)
 }
 
-fn package_metadata_from_hex_package(hex_package: HexPackage) {
+fn package_metadata_from_hex_package(
+  hex_package: HexPackage,
+  files: Set(Int),
+) -> PackageMetadata {
   PackageMetadata(
     name: hex_package.name,
     latest_version: hex_package.latest_version,
     inserted_at: hex_package.inserted_at,
     updated_at: hex_package.updated_at,
-    files: set.new(),
+    files:,
   )
 }
 
@@ -663,7 +666,7 @@ fn index_hex_package(
       let updated_file_count =
         corpus_builder.total_files + list.length(source_files)
 
-      let #(trigram_index, errors) =
+      let #(trigram_index, errors, file_indices) =
         index_source_files(
           source_files,
           corpus_builder.total_files,
@@ -675,7 +678,7 @@ fn index_hex_package(
         total_files: updated_file_count,
         trigram_index: TrigramIndex(trigram_index),
         package_metadata: [
-          package_metadata_from_hex_package(hex_package),
+          package_metadata_from_hex_package(hex_package, file_indices),
           ..corpus_builder.package_metadata
         ],
         errors: [errors, ..corpus_builder.errors],
@@ -691,30 +694,37 @@ pub fn index_source_files(
   source_files: List(String),
   current_file_count: Int,
   trigram_index: Dict(String, Set(Int)),
-) -> #(Dict(String, Set(Int)), List(Error)) {
-  list.index_fold(
-    source_files,
-    #(trigram_index, []),
-    fn(acc, source_file, source_file_index) {
-      let #(trigram_index, errors) = acc
-      let source_file_index = current_file_count + source_file_index
+) -> #(Dict(String, Set(Int)), List(Error), Set(Int)) {
+  let #(trigram_index, errors, file_indices) =
+    list.index_fold(
+      source_files,
+      #(trigram_index, [], []),
+      fn(acc, source_file, source_file_index) {
+        let #(trigram_index, errors, file_indices) = acc
+        let source_file_index = current_file_count + source_file_index
 
-      case simplifile.read_bits(source_file) {
-        Error(error) -> {
-          #(trigram_index, [
-            FileError2(error, while_processing: source_file),
-            ..errors
-          ])
-        }
-        Ok(file_data) -> {
-          let trigram_index =
-            index_file_data(file_data, source_file_index, trigram_index)
+        // TODO: If there is an error, should we bother traking this index?
+        let file_indices = [source_file_index, ..file_indices]
 
-          #(trigram_index, errors)
+        case simplifile.read_bits(source_file) {
+          Error(error) -> {
+            #(
+              trigram_index,
+              [FileError2(error, while_processing: source_file), ..errors],
+              file_indices,
+            )
+          }
+          Ok(file_data) -> {
+            let trigram_index =
+              index_file_data(file_data, source_file_index, trigram_index)
+
+            #(trigram_index, errors, file_indices)
+          }
         }
-      }
-    },
-  )
+      },
+    )
+
+  #(trigram_index, errors, set.from_list(file_indices))
 }
 
 fn index_file_data(file_data, source_file_index, trigram_index) {
@@ -785,18 +795,43 @@ pub fn search_result_line_numbers(search_result: SearchResult) -> List(Int) {
   |> list.map(fn(line) { line.index + 1 })
 }
 
+pub fn filter_corpus(
+  corpus: Corpus,
+  predicates: List(fn(PackageMetadata) -> Bool),
+) -> Set(Int) {
+  // Empty predicates list will always return true
+  let check_predicates = fn(package_metadata) {
+    list.all(predicates, fn(predicate) { predicate(package_metadata) })
+  }
+
+  corpus.package_metadata
+  |> list.fold(set.new(), fn(file_indices, package_metadata) {
+    case check_predicates(package_metadata) {
+      True -> set.union(file_indices, package_metadata.files)
+      False -> file_indices
+    }
+  })
+}
+
 pub fn search_query(
   query: String,
   corpus: Corpus,
   index_directory_parent: String,
+  predicates: List(fn(PackageMetadata) -> Bool),
   log_debug: fn(String) -> Nil,
 ) -> Result(List(SearchResult), List(Error)) {
   log_debug("searching query: " <> query)
   let query_trigrams =
     query |> bit_array.from_string |> trigrams.unique_trigrams
 
+  // NOTE: Both of these are fast, so you shouldn't have to worry about
+  // restricting the amount searched for either. The slower part is the exact
+  // matching.
   let file_indices =
-    get_putative_file_indices(corpus.trigram_index, query_trigrams)
+    set.intersection(
+      get_putative_file_indices(corpus.trigram_index, query_trigrams),
+      filter_corpus(corpus, predicates),
+    )
 
   case set.size(file_indices) {
     0 -> {
