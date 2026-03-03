@@ -86,11 +86,15 @@ pub fn serialize_corpus(corpus: Corpus) -> BitArray {
   <<files:bits, trigrams:bits, package_metadata:bits>>
 }
 
-/// Deserialize a corpus.  Should be called by the server on server startup.
+// TODO: this function is only used in tests.
 pub fn deserialize_corpus(data: BitArray) -> Result(Corpus, Error) {
   use parsed <- result.try(deserialize_files(data))
   let files = parsed.value
-  use parsed <- result.try(deserialize_trigram_index(parsed.remaining))
+  // TODO: this value should be taken from a param
+  use parsed <- result.try(deserialize_trigram_index(
+    parsed.remaining,
+    collect_garbage: False,
+  ))
   let trigram_index = parsed.value
   use parsed <- result.try(
     serde.deserialize_list(parsed.remaining, deserialize_package_metadata)
@@ -128,10 +132,17 @@ fn serialize_trigram_index(trigram_index: TrigramIndex) -> BitArray {
 
 pub fn deserialize_trigram_index(
   data: BitArray,
+  collect_garbage collect_garbage: Bool,
 ) -> Result(serde.Parsed(TrigramIndex), Error) {
   case data {
     <<trigrams_count:little-size(32), data:bits>> -> {
-      do_deserialize_trigram_index(data, trigrams_count, dict.new(), 0)
+      do_deserialize_trigram_index(
+        data,
+        trigrams_count,
+        dict.new(),
+        0,
+        collect_garbage,
+      )
       |> result.map_error(SerdeError)
     }
 
@@ -152,11 +163,12 @@ fn do_deserialize_trigram_index(
   trigrams_count: Int,
   acc: Dict(String, Set(Int)),
   i: Int,
+  collect_garbage: Bool,
 ) -> Result(serde.Parsed(TrigramIndex), serde.Error) {
-  // This keeps it under 2gb (like 1.5gb as of the packages fetch on
-  // 2026-03-02)
-  let _ = case i % 500 {
-    0 -> {
+  case collect_garbage, i % 300 {
+    True, 0 -> {
+      // This keeps it under 2gb (like 1.5gb as of the packages fetch on
+      // 2026-03-02)
       logging.log(
         logging.Debug,
         "Collecting garbage on trigram "
@@ -164,9 +176,10 @@ fn do_deserialize_trigram_index(
           <> " of "
           <> int.to_string(trigrams_count),
       )
-      garbage_collect()
+      let _ = garbage_collect()
+      Nil
     }
-    _ -> True
+    _, _ -> Nil
   }
 
   case i < trigrams_count {
@@ -179,7 +192,13 @@ fn do_deserialize_trigram_index(
               let file_indices = parsed.value
               let acc = dict.insert(acc, trigram, file_indices)
               let data = parsed.remaining
-              do_deserialize_trigram_index(data, trigrams_count, acc, i + 1)
+              do_deserialize_trigram_index(
+                data,
+                trigrams_count,
+                acc,
+                i + 1,
+                collect_garbage,
+              )
             }
             Error(error) -> Error(error)
           }
@@ -638,6 +657,7 @@ fn index_hex_package(
   outdir: String,
   corpus_builder: CorpusBuilder,
 ) -> CorpusBuilder {
+  // TODO: we skip searching super large files, but we still index them.
   case fetch_package_source2(hex_package, outdir) {
     Ok(source_files) -> {
       let updated_file_count =

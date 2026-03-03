@@ -110,7 +110,7 @@ pub fn extract_source_files__correctly_sets_permissions__test() {
 //
 
 pub fn corpus_roundtrip_1__test() {
-  let corpus =
+  let the_corpus =
     corpus.Corpus(
       files: iv.from_list(["file1", "file2", "file3", "file4"]),
       trigram_index: corpus.TrigramIndex(
@@ -140,10 +140,10 @@ pub fn corpus_roundtrip_1__test() {
       ],
     )
 
-  let serialized = corpus.serialize_corpus(corpus)
+  let serialized = corpus.serialize_corpus(the_corpus)
   let assert Ok(deserialized) = corpus.deserialize_corpus(serialized)
 
-  assert deserialized == corpus
+  assert deserialized == the_corpus
 }
 
 pub fn corpus_roundtrip__test() {

@@ -51,6 +51,11 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
   // start.
   let secret_key_base = wisp.random_string(64)
 
+  let collect_garbage = case envoy.get("GLEAM_CODESEARCH_COLLECT_GARBAGE") {
+    Ok(_) -> True
+    Error(Nil) -> False
+  }
+
   let assert Ok(index_directory) = envoy.get("GLEAM_CODESEARCH_INDEX_DIRECTORY")
     as "env var GLEAM_CODESEARCH_INDEX_DIRECTORY was not set"
   let assert Ok(True) = simplifile.is_directory(index_directory)
@@ -75,7 +80,8 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
     let files = parsed.value
 
     logging.log(logging.Debug, "Deserializing trigram index")
-    let assert Ok(parsed) = corpus.deserialize_trigram_index(parsed.remaining)
+    let assert Ok(parsed) =
+      corpus.deserialize_trigram_index(parsed.remaining, collect_garbage:)
     let trigram_index = parsed.value
 
     logging.log(logging.Debug, "Deserializing package metadata")
