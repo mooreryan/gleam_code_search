@@ -27,6 +27,9 @@ COPY . /app/
 COPY --from=tailwind /app/server/priv/static/css/app.css \
     /app/server/priv/static/css/app.css
 
+# We need git because some of our app deps are fetched with git as of v4
+RUN apk add --no-cache git
+
 RUN cd /app/server && gleam export erlang-shipment
 
 # Final stage
