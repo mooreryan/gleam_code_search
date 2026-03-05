@@ -389,7 +389,6 @@ pub fn make_corpus(
   )
 
   logging.log(logging.Info, "creating corpus")
-  // use corpus <- result.try(process_hex_packages(all_packages, data_outdir))
 
   let all_packages = case test_corpus {
     True -> list.take(all_packages, 10)
@@ -673,6 +672,13 @@ fn index_hex_package(
           corpus_builder.trigram_index.index,
         )
 
+      // We need to ensure that the source files are relative paths when they
+      // are inserted into the corpus. Then in the server, you can join the
+      // corpus data dir to the file name to actually read the file. This allows
+      // the corpus to be relocatable.
+      let source_files =
+        list.map(source_files, remove_from_start(_, what: outdir))
+
       CorpusBuilder(
         files: [source_files, ..corpus_builder.files],
         total_files: updated_file_count,
@@ -686,6 +692,19 @@ fn index_hex_package(
     }
     Error(error) ->
       CorpusBuilder(..corpus_builder, errors: [[error], ..corpus_builder.errors])
+  }
+}
+
+@internal
+pub fn remove_from_start(string, what prefix) {
+  case string.starts_with(string, prefix) {
+    True -> {
+      case string.split_once(string, on: prefix) {
+        Ok(#(_, rest)) -> rest
+        Error(Nil) -> string
+      }
+    }
+    False -> string
   }
 }
 
@@ -854,6 +873,7 @@ pub fn search_query(
             use file <- result.try(pull_file(corpus.files, file_index))
             let file_with_directory =
               filepath.join(index_directory_parent, file)
+
             use file_info <- result.try(
               simplifile.file_info(file_with_directory)
               |> result.map_error(fn(error) {

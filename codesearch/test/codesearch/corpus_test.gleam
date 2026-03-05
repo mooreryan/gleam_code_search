@@ -425,3 +425,27 @@ fn version_generator() {
   <> "."
   <> int.to_string(patch)
 }
+
+// UTILS ---------------------------------------------------------------------
+//
+//
+
+pub fn remove_from_start__prefix_is_present__test() {
+  assert corpus.remove_from_start("/apple/pie/is/good.txt", what: "/apple/pie/")
+    == "is/good.txt"
+}
+
+pub fn remove_from_start__prefix_is_not_present__test() {
+  assert corpus.remove_from_start("/apple/pie/is/good.txt", what: "oops")
+    == "/apple/pie/is/good.txt"
+}
+
+pub fn remove_from_start__prefix_is_not_present_2__test() {
+  assert corpus.remove_from_start("/apple/pie/is/good.txt", what: "apple/pie")
+    == "/apple/pie/is/good.txt"
+}
+
+pub fn remove_from_start__prefix_is_not_present_3__test() {
+  assert corpus.remove_from_start("/apple/pie/is/good.txt", what: "")
+    == "/apple/pie/is/good.txt"
+}

@@ -28,6 +28,9 @@ import simplifile
 import wisp.{type Request, type Response}
 import wisp/wisp_mist
 
+// TODO: on query param parse params, you get the bad request page. It's okay,
+// but not the friendliest!
+
 const min_query_length: Int = 3
 
 const max_query_length: Int = 64
@@ -47,7 +50,7 @@ pub fn main() -> Nil {
 }
 
 pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
-  logging.configure_with(logging.default_config())
+  logging.configure_with(logging.Config(show_timestamp: True))
   wisp.set_logger_level(wisp.DebugLevel)
 
   // We don't use the secret key in this app, so just generate a random one at
@@ -68,10 +71,10 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
   let assert Ok(True) = simplifile.is_file(index_path)
     as { "index_path " <> index_path <> " does not exist" }
 
-  let index_path_parent = filepath.join(index_directory, "..")
-  let assert Ok(index_path_parent) = filepath.expand(index_path_parent)
-  let assert Ok(True) = simplifile.is_directory(index_path_parent)
-    as { "index_path_parent " <> index_path_parent <> " does not exist" }
+  let index_data_directory = filepath.join(index_directory, "data")
+  let assert Ok(index_data_directory) = filepath.expand(index_data_directory)
+  let assert Ok(True) = simplifile.is_directory(index_data_directory)
+    as { "index_data_directory " <> index_data_directory <> " does not exist" }
 
   wisp.log_debug("Reading index")
   let assert Ok(index_bits) = simplifile.read_bits(index_path)
@@ -119,7 +122,7 @@ pub fn start(_type: _, _args: _) -> Result(process.Pid, _) {
 
   let assert Ok(supervisor) =
     static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(searcher(searcher_name, index_path_parent))
+    |> static_supervisor.add(searcher(searcher_name, index_data_directory))
     |> static_supervisor.add(server_child_specification)
     |> static_supervisor.start
     as "failed to start supervisor"
@@ -143,7 +146,7 @@ type SearcherMessage {
 
 fn searcher(
   pool_name: process.Name(lifeguard.PoolMsg(SearcherMessage)),
-  index_directory_parent: String,
+  index_data_directory: String,
 ) -> supervision.ChildSpecification(static_supervisor.Supervisor) {
   let lifeguard_child_spec =
     lifeguard.new(pool_name, Nil)
@@ -156,7 +159,7 @@ fn searcher(
             corpus.search_query(
               query,
               corpus,
-              index_directory_parent,
+              index_data_directory,
               predicates,
               wisp.log_debug,
             )
